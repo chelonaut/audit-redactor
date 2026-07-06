@@ -2,7 +2,7 @@
 
 ## 1. Purpose
 
-A deterministic, auditable tool that redacts sensitive data (AWS account numbers, person names,
+A hybrid, auditable tool that redacts sensitive data (AWS account numbers, person names,
 usernames/emails, phone numbers, client company names, URLs) from documents before they're shared
 with auditors. Runs as a Dockerized Python CLI, portable between a local Mac and CI/CD.
 
@@ -32,7 +32,7 @@ marketplace repo.
 |---|---|
 | PDF | True redaction (delete underlying content objects, not overlay) |
 | PNG / JPEG | Pixel-level black-box overwrite, re-encoded fresh (no layers) |
-| Markdown | Regex/NER text substitution → `[REDACTED]`, output stays Markdown |
+| Markdown | Regex/NER text substitution → `[REDACTED]`, then **render to PDF by default** via headless Chromium (same rationale as HTML — audit-tool consistency) |
 | JSON | Structural walk + redact string leaf values, re-serialize as valid JSON |
 | HTML | Redact source, then **render to PDF by default** via headless Chromium (some audit tools reject HTML uploads) |
 
@@ -82,21 +82,23 @@ marketplace repo.
   would silently change its type, which could break an auditor's schema validation) — flagged as an
   explicit decision, revisit if a real document surfaces numeric PII that needs handling.
 
-### 2.7 HTML → PDF pipeline
+### 2.7 HTML/Markdown → PDF pipeline
 
-1. Redact the HTML **source** first: text nodes via regex/NER substitution, plus strip
-   `<script>` tags, HTML comments, `data-*` attributes, and meta tags (these can carry hidden PII or
-   tracking IDs invisible in the rendered page).
-2. Render the already-redacted HTML to PDF via a headless Chromium instance — **Playwright for
+1. Redact the **source text** first:
+   - HTML: text nodes via regex/NER substitution, plus strip `<script>` tags, HTML comments,
+     `data-*` attributes, and meta tags (these can carry hidden PII or tracking IDs invisible in the
+     rendered page).
+   - Markdown: regex/NER substitution directly on the raw Markdown text (same detector set as every
+     other format), *before* any HTML conversion.
+2. Markdown only: convert the already-redacted Markdown to HTML (e.g. `markdown`/`mistune`) using a
+   plain, minimal template — no external stylesheets or fonts that could phone out over the network.
+3. Render the already-redacted HTML to PDF via a headless Chromium instance — **Playwright for
    Python**, using Microsoft's official `mcr.microsoft.com/playwright/python` base image (bundles
    all required Linux dependencies, avoids a mixed Node/Python container).
-3. Run the standard PDF metadata-scrub pass on the output (Chrome embeds generator/timestamp
+4. Run the standard PDF metadata-scrub pass on the output (Chrome embeds generator/timestamp
    metadata by default).
-4. The intermediate redacted HTML exists only in memory/temp and is never written to persistent
-   output.
-
-Markdown is **not** included in this HTML→PDF conversion by default (only HTML was requested) —
-flagged as an open question below.
+5. The intermediate redacted HTML/Markdown exists only in memory/temp and is never written to
+   persistent output.
 
 ### 2.8 Detection architecture — hybrid local + Claude
 
@@ -162,7 +164,7 @@ format-specific extractor  ──── PDF: PyMuPDF word/bbox map
                             ──── Image: OCR (Tesseract) word/bbox map
                             ──── JSON: recursive tree walk (string leaves)
                             ──── HTML: redact source → Playwright → PDF
-                            ──── Markdown: raw text
+                            ──── Markdown: redact source → convert to HTML → Playwright → PDF
       │
       ▼
 regex core (AWS #s, phones, emails, URLs, curated company names)
@@ -202,15 +204,16 @@ apply filename + metadata scrub          Claude augmentation pass
    skeleton.
 2. **Regex core** — AWS account numbers, phone numbers, emails/usernames, URLs; curated company-name
    matcher; unit tests with synthetic fixtures for each pattern.
-3. **Text-format handlers (simplest first)** — Markdown (regex substitution), JSON (tree walk +
-   re-serialize). Validate JSON output stays parseable after redaction.
+3. **Text-format handlers (simplest first)** — Markdown (regex substitution; PDF rendering deferred
+   to phase 6 since it shares the HTML→PDF pipeline), JSON (tree walk + re-serialize). Validate JSON
+   output stays parseable after redaction.
 4. **PDF handler** — PyMuPDF extraction (word/bbox map) → `apply_redactions()` → metadata strip →
    full rewrite/flatten → post-save verification pass (confirm redacted strings are unrecoverable,
    including a specific check for shared XObject/Form-stream leakage).
 5. **Image handler** — OCR (Tesseract) → bbox map → Pillow pixel overwrite → re-encode → metadata
    strip (EXIF/IPTC/XMP/text chunks, including embedded thumbnails).
-6. **HTML → PDF pipeline** — BeautifulSoup source redaction → Playwright headless render → PDF
-   metadata scrub.
+6. **HTML/Markdown → PDF pipeline** — BeautifulSoup source redaction (HTML) or regex/NER redaction
+   then Markdown→HTML conversion (Markdown) → Playwright headless render → PDF metadata scrub.
 7. **Filename redaction module** — applies to every output regardless of type.
 8. **Local ML integration** — load `ab-ai/pii_model` via `transformers`, wire up confidence
    thresholding, **validate its actual precision/recall against a held-out sample of realistic
@@ -228,10 +231,11 @@ apply filename + metadata scrub          Claude augmentation pass
 
 ---
 
-## 5. Open questions to resolve before / during implementation
+## 5. Open questions
 
-1. Should Markdown also get the HTML-style "render to PDF" treatment for audit-tool consistency, or
-   stay Markdown → Markdown? (Currently scoped to HTML only.)
+1. ~~Should Markdown also get the HTML-style "render to PDF" treatment?~~ **Resolved: yes.** Markdown
+   gets the same redact-source → render-to-PDF treatment as HTML, for audit-tool consistency (see
+   §2.2, §2.7).
 2. Confidence threshold value(s) for ab-ai/pii_model — to be set empirically in Phase 8, not
    guessed up front.
 

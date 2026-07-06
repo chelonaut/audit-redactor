@@ -1,0 +1,37 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "audit-redactor"
+version = "0.1.0"
+description = "Hybrid, auditable redaction tool for PDF/PNG/JPEG/Markdown/JSON/HTML before sharing with auditors."
+requires-python = ">=3.12"
+readme = "README.md"
+dependencies = [
+    "click>=8.1",
+    "pymupdf>=1.24",
+    "pillow>=10.0",
+    "pytesseract>=0.3.10",
+    "beautifulsoup4>=4.12",
+    "markdown>=3.6",
+    "playwright==1.61.0",
+    "transformers>=4.42",
+    "torch>=2.3",
+    "anthropic>=0.34",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8",
+    "pytest-cov",
+]
+
+[project.scripts]
+audit-redactor = "audit_redactor.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
