@@ -70,6 +70,14 @@ def redact_char_ranges(span: Span) -> list[tuple[int, int]]:
             else:
                 flags.append(False)
         return _contiguous_ranges(flags)
+    if span.entity_type == EntityType.AWS_ACCESS_KEY_ID:
+        # Keep the last 4 characters visible (no separators to preserve --
+        # the whole 20-char ID is one contiguous alphanumeric run), so two
+        # different keys can be told apart at a glance without exposing
+        # either one in full.
+        if len(text) <= 4:
+            return []
+        return [(0, len(text) - 4)]
     if span.entity_type == EntityType.PHONE_NUMBER:
         # Every digit is redacted completely; separators are left visible.
         return _contiguous_ranges([ch.isdigit() for ch in text])

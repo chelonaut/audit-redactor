@@ -29,6 +29,16 @@ class TestApplySpanText:
         span = _span(EntityType.PHONE_NUMBER, "555-123-4567", 5)
         assert redact_text(text, [span]) == "call xxx-xxx-xxxx now"
 
+    def test_aws_access_key_id_keeps_last_4_characters(self) -> None:
+        text = "key AKIAIOSFODNN7EXAMPLE end"
+        span = _span(EntityType.AWS_ACCESS_KEY_ID, "AKIAIOSFODNN7EXAMPLE", 4)
+        assert redact_text(text, [span]) == "key xxxxxxxxxxxxxxxxMPLE end"
+
+    def test_short_aws_access_key_id_left_as_is(self) -> None:
+        text = "key ABCD end"
+        span = _span(EntityType.AWS_ACCESS_KEY_ID, "ABCD", 4)
+        assert redact_text(text, [span]) == "key ABCD end"
+
     def test_person_name_keeps_first_4_characters(self) -> None:
         text = "met Jonathan Smith today"
         span = _span(EntityType.PERSON_NAME, "Jonathan Smith", 4)

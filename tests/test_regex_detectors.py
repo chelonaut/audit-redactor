@@ -1,5 +1,6 @@
 from audit_redactor.detectors.base import EntityType
 from audit_redactor.detectors.regex_detectors import (
+    AwsAccessKeyIdDetector,
     AwsAccountIdDetector,
     EmailDetector,
     PhoneNumberDetector,
@@ -70,6 +71,58 @@ class TestPhoneNumberDetector:
         # No separators and no leading '+' -- left to the AWS detector instead,
         # so the two detectors never disagree about the same digit run.
         spans = self.detector.detect("Account: 123456789012")
+        assert spans == []
+
+    def test_iso_date_not_matched_as_phone(self) -> None:
+        spans = self.detector.detect("Screenshot 2026-07-06 at 17.55.28.png")
+        assert spans == []
+
+    def test_iso_datetime_not_matched_as_phone(self) -> None:
+        spans = self.detector.detect("Exported at 2026-07-06T17:55:28Z for the audit.")
+        assert spans == []
+
+    def test_slash_date_not_matched_as_phone(self) -> None:
+        spans = self.detector.detect("Printed 06/07/2026 for the record.")
+        assert spans == []
+
+    def test_implausible_date_shape_still_matched_as_phone(self) -> None:
+        # Month 13 doesn't exist -- this is not a real date, so it falls
+        # back to being treated as an ordinary separator-shaped number.
+        spans = self.detector.detect("Reference 2026-13-45 was used.")
+        assert _texts(spans) == {"2026-13-45"}
+
+    def test_real_phone_number_with_short_groups_still_matched(self) -> None:
+        # Shape alone ("NN-NN-NNNN") could look date-ish, but the group
+        # lengths here (2-2-4, not the compact date shapes) don't collide
+        # with anything find_date_time_ranges recognizes.
+        spans = self.detector.detect("Ext 12-34-5678 please.")
+        assert _texts(spans) == {"12-34-5678"}
+
+
+class TestAwsAccessKeyIdDetector:
+    def setup_method(self) -> None:
+        self.detector = AwsAccessKeyIdDetector()
+
+    def test_akia_long_term_key(self) -> None:
+        spans = self.detector.detect("Access key AKIAIOSFODNN7EXAMPLE was used.")
+        assert _texts(spans) == {"AKIAIOSFODNN7EXAMPLE"}
+        assert spans[0].entity_type == EntityType.AWS_ACCESS_KEY_ID
+
+    def test_asia_temporary_key(self) -> None:
+        spans = self.detector.detect("Temp key ASIAV3ZUEFP6AAAAAAAA in use.")
+        assert _texts(spans) == {"ASIAV3ZUEFP6AAAAAAAA"}
+
+    def test_two_different_keys_both_found(self) -> None:
+        text = "ASIAV3ZUEFP6AAAAAAAA and ASIAV3ZUEFP6BBBBBBBB"
+        spans = self.detector.detect(text)
+        assert _texts(spans) == {"ASIAV3ZUEFP6AAAAAAAA", "ASIAV3ZUEFP6BBBBBBBB"}
+
+    def test_unrecognized_prefix_not_matched(self) -> None:
+        spans = self.detector.detect("Not a key: ZZZZV3ZUEFP6AAAAAAAA")
+        assert spans == []
+
+    def test_wrong_length_not_matched(self) -> None:
+        spans = self.detector.detect("Too short: AKIAIOSFODNN7EXAMP")
         assert spans == []
 
 

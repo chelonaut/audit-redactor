@@ -41,11 +41,26 @@ marketplace repo.
 | Data type | Detection | Redaction method |
 |---|---|---|
 | AWS account numbers | Regex | Mask all but last 4 digits |
+| AWS access key IDs (AKIA/ASIA/etc.) | Regex | Mask all but last 4 characters |
 | Phone numbers | Regex | Redact all digits completely |
 | Emails / usernames (GitHub, Jira, Notion, etc.) | Regex | Full redaction |
+| Platform usernames identified from a profile/repo URL (e.g. GitHub) | Cross-reference (detectors/platform_identity.py) | Full redaction |
 | URLs | Regex | Redact entire URL incl. scheme |
 | Person names | Local NER (ab-ai/pii_model) + Claude augmentation | Obscure all but first 4 characters |
 | Client company names | Curated list (web-search-confirmed) + Claude augmentation | Full redaction |
+
+**Dates and times are deliberately never redacted, and are actively protected from the phone-number
+detector's separator-based pattern** (`detectors/date_time.py`): knowing *when* evidence is from is
+important for auditability, so a date/time shape (`2026-07-06`, `17.55.28`, an AWS CloudTrail export's
+`20260516T1805Z`, etc.) is recognized by validating its year/month/day/hour/minute/second components
+against plausible ranges (year 2000–current+50, month 1–12, and so on) rather than matched by a fixed
+format list, and any phone-regex match overlapping a recognized date/time is dropped. Deliberately not
+a general-purpose date parser — it only needs to decide "protect this from the phone detector," not
+parse a calendar date correctly in every locale/ambiguous-order case.
+
+AWS access key IDs are matched by the fixed set of 4-letter type prefixes AWS documents (AKIA, ASIA,
+AIDA, AROA, and others identifying different IAM resource types, all sharing the same 20-character
+shape) — not guaranteed exhaustive if AWS ever introduces a new prefix.
 
 **Images are an exception to the partial-mask methods above (AWS/phone/person name):** phase 5
 found, empirically, that Tesseract's word-level bbox is an *estimate* that can be off by more than a
@@ -261,9 +276,12 @@ deferred — see 2.8's "Local NER" note.)
     entrypoint outright, and the two PDF gaps documented in 2.4 (sensitive link URIs, image-only
     "scanned" pages). Still open from that same run, not yet fixed: OCR can fail to read
     small/tightly-kerned UI text even when contrast is otherwise fine (confirmed, not just
-    theorized — see 2.3's image-handler note), and filename redaction can over-match a date/time
-    as a phone number (benign given the recall-over-precision bias, just worth knowing). Re-run
-    this validation pass again after any detector or PDF/image-handling change, not just once.
+    theorized — see 2.3's image-handler note). A separate real-data validation run against a genuine
+    AWS CloudTrail export (`~/Downloads/Example`) found and fixed two more gaps: no AWS access key ID
+    detector existed at all, and the phone-number regex was misreading filename/JSON timestamps
+    (`2026-07-06 at 17.55.28`, CloudTrail's `20260516T1805Z`) as phone numbers — both fixed per 2.3
+    above. Re-run this validation pass again after any detector or PDF/image-handling change, not
+    just once.
 12. **Documentation** — README now covers usage, flags, exit codes, what's redacted per format
     (and what isn't — JSON's no-Claude-augmentation gap, OCR limitations, no local NER), and Claude
     API key setup. Both open questions below are resolved.

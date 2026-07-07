@@ -1,9 +1,10 @@
 # audit-redactor
 
-Hybrid, auditable tool that redacts sensitive data (AWS account numbers, person
-names, usernames/emails, phone numbers, client company names, URLs) from
-documents before they're shared with auditors. See `PLAN.md` for the full
-design and build phases.
+Hybrid, auditable tool that redacts sensitive data (AWS account numbers, AWS
+access key IDs, person names, usernames/emails, phone numbers, client company
+names, URLs) from documents before they're shared with auditors. Dates and
+times are preserved on purpose — see below. See `PLAN.md` for the full design
+and build phases.
 
 **Originals are never modified.** Every run reads from the input path and
 writes to a separate output path.
@@ -65,11 +66,19 @@ network failure, or `--offline` never blocks redaction, only reduces recall.
 | Data type | Detection | Redaction method |
 |---|---|---|
 | AWS account numbers | Regex | Mask all but last 4 digits |
+| AWS access key IDs (AKIA/ASIA/etc.) | Regex | Mask all but last 4 characters |
 | Phone numbers | Regex | Redact all digits completely |
 | Emails / usernames | Regex | Full redaction |
+| Platform usernames identified from a profile/repo URL (e.g. `github.com/<user>`) | Cross-reference — see PLAN.md 2.3 | Full redaction |
 | URLs | Regex | Redact entire URL incl. scheme |
 | Person names | Curated regex/company-list pass + Claude augmentation | Obscure all but first 4 characters |
 | Client company names | Curated list (web-search-confirmed) + Claude augmentation | Full redaction |
+
+**Dates and times are never redacted, on purpose** — knowing *when* evidence
+is from matters for auditability. A date/time shape (`2026-07-06`, `17.55.28`,
+an AWS CloudTrail export's `20260516T1805Z`) is recognized by checking its
+year/month/day/etc. components against plausible ranges, and the phone-number
+detector skips anything that overlaps one.
 
 **Images (PNG/JPEG, and PDF pages that are just a raster image with no real
 text layer) are an exception**: every entity type redacts the *entire* OCR
@@ -98,11 +107,13 @@ same regex/company-list detectors, applied automatically regardless of format.
   UI badge OCR'd into nonsense instead of the digits it actually contained.
 - **JSON gets no Claude augmentation** (see table above) — only the local
   regex/company-list pass applies.
-- **Loose phone-number matching can over-redact.** Digit groups separated by
-  dashes or dots (e.g. a date or timestamp in a filename) can match the
-  phone-number pattern and get masked. Harmless given the project's
-  deliberate bias toward over-redaction rather than missed PII, but can be
-  surprising.
+- **Date/time protection isn't a full date parser.** It only recognizes the
+  ISO-ish and common separator-based shapes described above, validated by
+  plausible year/month/day/etc. ranges rather than a real calendar parser —
+  a genuinely unusual date format not covered by those shapes could still be
+  misread as a phone number. Given the shapes it does cover, this is
+  intentionally biased toward preserving legibility over redacting an
+  ambiguous digit run.
 - **Local NER (`ab-ai/pii_model`) is not implemented.** An earlier design
   included a local NER model between the regex pass and Claude augmentation;
   it was dropped as a possible future extension, not near-term work — see

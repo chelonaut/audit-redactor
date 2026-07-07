@@ -1,5 +1,5 @@
-"""Regex core detectors: AWS account numbers, phone numbers, emails,
-@-mention usernames, and URLs (PLAN.md 2.3, build phase 2).
+"""Regex core detectors: AWS account numbers, AWS access key IDs, phone
+numbers, emails, @-mention usernames, and URLs (PLAN.md 2.3, build phase 2).
 
 These are the highest-confidence detectors in the pipeline (PLAN.md 2.8 step
 1) -- every span they emit is applied immediately, with no NER/Claude
@@ -11,6 +11,7 @@ from __future__ import annotations
 import re
 
 from audit_redactor.detectors.base import EntityType, Span
+from audit_redactor.detectors.date_time import find_date_time_ranges
 
 # Matches an AWS account ID either embedded in an ARN (`arn:aws:...::123456789012:...`)
 # or written bare, as 12 contiguous digits or the AWS console's 4-4-4
@@ -20,6 +21,17 @@ from audit_redactor.detectors.base import EntityType, Span
 _AWS_ACCOUNT_RE = re.compile(
     r"arn:aws[a-zA-Z0-9-]*:[a-zA-Z0-9-]*:[a-zA-Z0-9-]*:(?P<arn_id>\d{12}):"
     r"|(?<!\d)(?P<bare_id>\d{4}-\d{4}-\d{4}|\d{12})(?!\d)"
+)
+
+# AWS access key IDs are always exactly 20 characters: one of a fixed set of
+# 4-letter type prefixes (sourced from AWS's own "unique identifiers" docs --
+# not guaranteed exhaustive if AWS ever adds a new prefix) followed by 16
+# uppercase alphanumeric characters. AKIA (long-term access key) and ASIA
+# (temporary/STS access key) are the two seen day to day; the rest identify
+# other IAM resource types but share the exact same shape.
+_AWS_ACCESS_KEY_RE = re.compile(
+    r"(?<![A-Z0-9])(?:ABIA|ACCA|AGPA|AIDA|AIPA|AKIA|ANPA|ANVA|APKA|AROA|ASCA|ASIA)"
+    r"[A-Z0-9]{16}(?![A-Z0-9])"
 )
 
 # Phone numbers are only matched when they carry a separator or a leading
@@ -63,16 +75,41 @@ class AwsAccountIdDetector:
 
 class PhoneNumberDetector:
     def detect(self, text: str) -> list[Span]:
+        # A date/time shape (e.g. "2026-07-06", "17.55.28", a CloudTrail
+        # "20260516T1805Z") is unambiguously not a phone number, and
+        # redacting it actively harms auditability -- knowing *when*
+        # evidence is from is the point of keeping a document's dates
+        # legible. See detectors/date_time.py.
+        excluded = find_date_time_ranges(text)
+        spans = []
+        for m in _PHONE_RE.finditer(text):
+            if any(m.start() < end and start < m.end() for start, end in excluded):
+                continue
+            spans.append(
+                Span(
+                    text=m.group(),
+                    entity_type=EntityType.PHONE_NUMBER,
+                    confidence=1.0,
+                    source="regex",
+                    start=m.start(),
+                    end=m.end(),
+                )
+            )
+        return spans
+
+
+class AwsAccessKeyIdDetector:
+    def detect(self, text: str) -> list[Span]:
         return [
             Span(
                 text=m.group(),
-                entity_type=EntityType.PHONE_NUMBER,
+                entity_type=EntityType.AWS_ACCESS_KEY_ID,
                 confidence=1.0,
                 source="regex",
                 start=m.start(),
                 end=m.end(),
             )
-            for m in _PHONE_RE.finditer(text)
+            for m in _AWS_ACCESS_KEY_RE.finditer(text)
         ]
 
 
@@ -146,6 +183,7 @@ URL_PATTERNS = (_SCHEME_URL_RE, _WWW_URL_RE)
 
 REGEX_DETECTORS = [
     AwsAccountIdDetector(),
+    AwsAccessKeyIdDetector(),
     PhoneNumberDetector(),
     EmailDetector(),
     UsernameMentionDetector(),

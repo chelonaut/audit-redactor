@@ -52,6 +52,7 @@ class EntityType:
     """String constants for `Span.entity_type`, shared across all detectors and appliers."""
 
     AWS_ACCOUNT_ID = "AWS_ACCOUNT_ID"
+    AWS_ACCESS_KEY_ID = "AWS_ACCESS_KEY_ID"
     PHONE_NUMBER = "PHONE_NUMBER"
     EMAIL = "EMAIL"
     USERNAME_MENTION = "USERNAME_MENTION"
