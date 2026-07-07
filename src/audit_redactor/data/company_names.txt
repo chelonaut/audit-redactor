@@ -1,0 +1,21 @@
+# Curated client company name list (PLAN.md 2.10).
+# One name per line, exact string match (case-insensitive), web-search-confirmed
+# before adding. Lines starting with # are ignored.
+#
+# This shipped file is a SAFE EXAMPLE/STARTER list only (well-known UK/US/Spain
+# supermarket chains, not real clients) so the tool works out of the box
+# without any real client names ever being committed to this repo. Replace or
+# extend it with your own curated, private list before production use --
+# point the CLI/detector at a different file rather than editing this one if
+# you don't want real client names in version control at all.
+Spar
+Sainsbury's
+ASDA
+Tesco
+Waitrose
+M&S
+Safeway
+Walmart
+7-Eleven
+Mercadona
+Carrefour

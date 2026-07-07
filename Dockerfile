@@ -12,7 +12,7 @@ WORKDIR /app
 COPY pyproject.toml README.md ./
 COPY src ./src
 
-RUN pip install --no-cache-dir . \
+RUN pip install --no-cache-dir '.[dev]' \
     && playwright install --with-deps chromium
 
 COPY tests ./tests
