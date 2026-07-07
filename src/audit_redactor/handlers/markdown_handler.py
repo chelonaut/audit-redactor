@@ -12,6 +12,7 @@ memory and is never written to persistent output.
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import markdown
@@ -30,12 +31,35 @@ _HTML_TEMPLATE = """<!DOCTYPE html>
 <style>
 body {{ font-family: sans-serif; max-width: 800px; margin: 2em auto; line-height: 1.5; }}
 code, pre {{ background: #f0f0f0; padding: 0.2em 0.4em; }}
+table {{ border-collapse: collapse; }}
+th, td {{ border: 1px solid #ccc; padding: 0.3em 0.6em; }}
 </style>
 </head>
 <body>
 {body}
 </body>
 </html>"""
+
+# python-markdown has no built-in GFM task-list support (would need a new
+# third-party dependency to get real "- [ ]"/"- [x]" checkbox rendering), so
+# this swaps the bracket marker for a raw, disabled <input type="checkbox">
+# on the redacted Markdown *string* before handing it to the converter --
+# inline HTML inside a list item passes through python-markdown untouched,
+# same as any other inline HTML. Deliberately runs after `redact_text`, not
+# before: `spans`' character offsets are computed against the original,
+# unmodified source text, so inserting HTML here first would shift every
+# offset after it and corrupt redaction.
+_TASK_LIST_ITEM_RE = re.compile(
+    r"^(?P<indent>[ \t]*)(?P<bullet>[-*+])\s\[(?P<mark>[ xX])\]\s+(?P<item>.*)$", re.MULTILINE
+)
+
+
+def _render_task_list_checkboxes(text: str) -> str:
+    def _replace(m: re.Match[str]) -> str:
+        checked = " checked" if m.group("mark").lower() == "x" else ""
+        return f'{m.group("indent")}{m.group("bullet")} <input type="checkbox"{checked} disabled> {m.group("item")}'
+
+    return _TASK_LIST_ITEM_RE.sub(_replace, text)
 
 
 @register(".md", ".markdown")
@@ -50,15 +74,15 @@ def redact_markdown(input_path: Path, output_path: Path, offline: bool) -> Path:
     identity_detector = KnownIdentityDetector(find_identity_usernames([text]))
     spans = detect_text_with_claude(text, offline, identity_detector=identity_detector)
     redacted_markdown = redact_text(text, spans)
+    redacted_markdown = _render_task_list_checkboxes(redacted_markdown)
 
-    # Without the "fenced_code" extension, python-markdown's core parser
-    # doesn't understand ``` fences at all -- it misreads the whole block as
-    # a single inline <code> span with the language hint leaking in as
-    # literal text, and since a bare (non-<pre>) <code> tag doesn't preserve
-    # whitespace, Chromium collapses every line of real code onto one line
-    # when rendering to PDF. "fenced_code" produces a real <pre><code>
-    # block instead, which preserves line breaks and indentation correctly.
-    body_html = markdown.markdown(redacted_markdown, extensions=["fenced_code"])
+    # Without "fenced_code"/"tables", python-markdown's core parser doesn't
+    # understand ``` fences or GFM pipe tables at all: a fenced block gets
+    # misread as a single inline <code> span with the language hint leaking
+    # in as literal text and every line collapsed onto one (a bare <code>
+    # tag doesn't preserve whitespace the way <pre> does), and a pipe table
+    # is left as literal "| a | b |" text instead of being parsed at all.
+    body_html = markdown.markdown(redacted_markdown, extensions=["fenced_code", "tables"])
     full_html = _HTML_TEMPLATE.format(body=body_html)
 
     render_and_finish_pdf(full_html, spans, pdf_output_path)

@@ -1,6 +1,7 @@
 import fitz
 import pytest
 
+from audit_redactor.handlers.markdown_handler import _render_task_list_checkboxes
 from audit_redactor.pipeline import redact_file
 
 
@@ -141,3 +142,91 @@ class TestMarkdownHandler:
         assert "python" not in text
         assert "def notify():" in text
         assert '    email = "(REDACTED)"' in text
+
+    def test_table_is_parsed_not_left_as_literal_pipe_text(self, tmp_path) -> None:
+        # Regression test: without the "tables" markdown extension, a GFM
+        # pipe table is left completely unparsed -- rendered as literal
+        # "| a | b |" text instead of an actual table.
+        src = tmp_path / "notes.md"
+        src.write_text(
+            "| Name | Email |\n"
+            "|------|-------|\n"
+            "| Jane Doe | jane.doe@example.com |\n",
+            encoding="utf-8",
+        )
+        dest = tmp_path / "out.md"
+
+        actual = redact_file(src, dest, True)
+
+        text = _extract_text(actual)
+        assert "|" not in text
+        assert "Jane Doe" in text
+        assert "(REDACTED)" in text
+        assert "jane.doe@example.com" not in text
+
+    def test_task_list_items_render_as_checkboxes(self, tmp_path) -> None:
+        src = tmp_path / "notes.md"
+        src.write_text(
+            "- [ ] Review AWS account 123456789012\n"
+            "- [x] Notify jane.doe@example.com\n"
+            "- Normal bullet item\n",
+            encoding="utf-8",
+        )
+        dest = tmp_path / "out.md"
+
+        actual = redact_file(src, dest, True)
+
+        text = _extract_text(actual)
+        # The literal "[ ]"/"[x]" markers must be gone (replaced by a real
+        # <input type="checkbox">, which isn't extractable as text) while
+        # the redacted item text survives -- and content still gets redacted.
+        assert "[ ]" not in text
+        assert "[x]" not in text
+        assert "Review AWS account xxxxxxxx9012" in text
+        assert "Notify (REDACTED)" in text
+        assert "Normal bullet item" in text
+
+    def test_task_list_checkbox_syntax_inside_redacted_text_not_mangled(self, tmp_path) -> None:
+        # The checkbox regex runs on the already-redacted string -- confirm
+        # a placeholder or masked value sitting right after the checkbox
+        # marker doesn't confuse the substitution.
+        src = tmp_path / "notes.md"
+        src.write_text("- [x] jane.doe@example.com is done\n", encoding="utf-8")
+        dest = tmp_path / "out.md"
+
+        actual = redact_file(src, dest, True)
+
+        text = _extract_text(actual)
+        assert "[x]" not in text
+        assert "(REDACTED) is done" in text
+
+
+class TestRenderTaskListCheckboxes:
+    def test_unchecked_item(self) -> None:
+        result = _render_task_list_checkboxes("- [ ] Todo item")
+        assert result == '- <input type="checkbox" disabled> Todo item'
+
+    def test_checked_item_lowercase_x(self) -> None:
+        result = _render_task_list_checkboxes("- [x] Done item")
+        assert result == '- <input type="checkbox" checked disabled> Done item'
+
+    def test_checked_item_uppercase_x(self) -> None:
+        result = _render_task_list_checkboxes("- [X] Done item")
+        assert result == '- <input type="checkbox" checked disabled> Done item'
+
+    def test_asterisk_and_plus_bullets(self) -> None:
+        assert '<input type="checkbox" disabled>' in _render_task_list_checkboxes("* [ ] Todo")
+        assert '<input type="checkbox" disabled>' in _render_task_list_checkboxes("+ [ ] Todo")
+
+    def test_indentation_preserved(self) -> None:
+        result = _render_task_list_checkboxes("  - [ ] Nested todo")
+        assert result == '  - <input type="checkbox" disabled> Nested todo'
+
+    def test_non_task_list_line_untouched(self) -> None:
+        assert _render_task_list_checkboxes("- Normal bullet item") == "- Normal bullet item"
+
+    def test_bracket_text_that_is_not_a_task_marker_untouched(self) -> None:
+        # A literal "[ ]" that isn't a checkbox marker at all (no bullet
+        # prefix) must be left alone.
+        text = "Some text with [ ] a bracket in the middle."
+        assert _render_task_list_checkboxes(text) == text
