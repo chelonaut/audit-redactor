@@ -41,7 +41,7 @@ marketplace repo.
 | Data type | Detection | Redaction method |
 |---|---|---|
 | AWS account numbers | Regex | Mask all but last 4 digits |
-| AWS access key IDs (AKIA/ASIA/etc.) | Regex | Mask all but last 4 characters |
+| AWS access key IDs (AKIA/ASIA/etc.) | Regex | Mask all but the 4-character type prefix and last 4 characters |
 | Phone numbers | Regex | Redact all digits completely |
 | Emails / usernames (GitHub, Jira, Notion, etc.) | Regex | Full redaction |
 | Platform usernames identified from a profile/repo URL (e.g. GitHub) | Cross-reference (detectors/platform_identity.py) | Full redaction |
@@ -53,8 +53,15 @@ marketplace repo.
 | OpenAI API keys (`sk-`/`sk-proj-`/`sk-svcacct-`) | Regex | Full redaction |
 | Notion tokens (`secret_...`/`ntn_...`) | Regex | Full redaction |
 | JWTs | Regex (structural — see below) | Full redaction |
-| Person names | Local NER (ab-ai/pii_model) + Claude augmentation | Obscure all but first 4 characters |
+| Person names | Curated regex/company-list pass + Claude augmentation | Obscure all but the first N characters, scaled by name length (see below) |
 | Client company names | Curated list (web-search-confirmed) + Claude augmentation | Full redaction |
+
+**Person-name masking scales the number of visible leading characters with the name's own length**,
+rather than a flat "keep first 4": ≤4 characters keep 1, 5–6 keep 2, 7–8 keep 3, 9+ keep 4. Found via a
+real document where Claude correctly identified a 4-character name ("Sebb"), and the old flat "keep
+first 4" rule masked *nothing at all* for it — there was nothing left after the first 4 characters to
+hide — which the post-redaction verification pass correctly caught and failed the file over rather than
+shipping it half-redacted.
 
 **Two commonly-requested token types are deliberately not detected, each for a stated reason
 (`detectors/api_keys.py`):** Atlassian Statuspage API keys have no identifiable prefix — they're
@@ -89,8 +96,15 @@ a general-purpose date parser — it only needs to decide "protect this from the
 parse a calendar date correctly in every locale/ambiguous-order case.
 
 AWS access key IDs are matched by the fixed set of 4-letter type prefixes AWS documents (AKIA, ASIA,
-AIDA, AROA, and others identifying different IAM resource types, all sharing the same 20-character
-shape) — not guaranteed exhaustive if AWS ever introduces a new prefix.
+AIDA, AROA, and others identifying different IAM resource types) — not guaranteed exhaustive if AWS
+ever introduces a new prefix. The suffix length is a *minimum*, not an exact count: access keys are
+always 20 characters total, but a real CloudTrail `principalId` found in testing (an AIDA-prefixed IAM
+user unique ID) was 21 characters — AWS doesn't guarantee every one of these ID types is exactly the
+same length. The masking rule keeps both the 4-character type prefix (e.g. telling an ASIA temporary/
+STS key apart from an AKIA long-term one at a glance — useful for a policy requiring rotation of one
+type specifically) and the last 4 characters visible, masking only the middle; this was changed from
+an earlier "mask everything but the last 4" rule after concluding the prefix reveals nothing about the
+secret part of the ID.
 
 **Images are an exception to the partial-mask methods above (AWS/phone/person name):** phase 5
 found, empirically, that Tesseract's word-level bbox is an *estimate* that can be off by more than a

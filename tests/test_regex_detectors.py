@@ -121,9 +121,20 @@ class TestAwsAccessKeyIdDetector:
         spans = self.detector.detect("Not a key: ZZZZV3ZUEFP6AAAAAAAA")
         assert spans == []
 
-    def test_wrong_length_not_matched(self) -> None:
+    def test_too_short_not_matched(self) -> None:
         spans = self.detector.detect("Too short: AKIAIOSFODNN7EXAMP")
         assert spans == []
+
+    def test_21_character_iam_unique_id_still_matched(self) -> None:
+        # Regression test: AIDA-prefixed IAM user unique IDs (CloudTrail
+        # principalId fields) were found, empirically, to sometimes be 21
+        # characters -- one longer than an access key's 20. The suffix
+        # length must be a minimum, not an exact count, or a real ID like
+        # this silently goes undetected. Synthetic value, not a real ID.
+        key = "AIDAQ7X9K2M4P8R1T6W3Y"
+        assert len(key) == 21
+        spans = self.detector.detect(f"principalId: {key}")
+        assert _texts(spans) == {key}
 
 
 class TestEmailDetector:

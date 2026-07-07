@@ -67,13 +67,13 @@ network failure, or `--offline` never blocks redaction, only reduces recall.
 | Data type | Detection | Redaction method |
 |---|---|---|
 | AWS account numbers | Regex | Mask all but last 4 digits |
-| AWS access key IDs (AKIA/ASIA/etc.) | Regex | Mask all but last 4 characters |
+| AWS access key IDs (AKIA/ASIA/etc.) | Regex | Mask all but the 4-character type prefix and last 4 characters |
 | Phone numbers | Regex | Redact all digits completely |
 | Emails / usernames | Regex | Full redaction |
 | Platform usernames identified from a profile/repo URL (e.g. `github.com/<user>`) | Cross-reference — see PLAN.md 2.3 | Full redaction |
 | URLs | Regex | Redact entire URL incl. scheme |
 | Slack tokens & webhooks, Atlassian (Jira/Confluence) tokens, GitHub tokens, Anthropic/OpenAI API keys, Notion tokens, JWTs | Regex — see PLAN.md 2.3 | Full redaction |
-| Person names | Curated regex/company-list pass + Claude augmentation | Obscure all but first 4 characters |
+| Person names | Curated regex/company-list pass + Claude augmentation | Obscure all but the first N characters, scaled by name length: ≤4 chars keep 1, 5–6 keep 2, 7–8 keep 3, 9+ keep 4 |
 | Client company names | Curated list (web-search-confirmed) + Claude augmentation | Full redaction |
 
 **Not detected, on purpose:** Atlassian Statuspage API keys (no identifiable

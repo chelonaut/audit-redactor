@@ -82,21 +82,38 @@ def redact_char_ranges(span: Span) -> list[tuple[int, int]]:
                 flags.append(False)
         return _contiguous_ranges(flags)
     if span.entity_type == EntityType.AWS_ACCESS_KEY_ID:
-        # Keep the last 4 characters visible (no separators to preserve --
-        # the whole 20-char ID is one contiguous alphanumeric run), so two
-        # different keys can be told apart at a glance without exposing
-        # either one in full.
-        if len(text) <= 4:
+        # Keep the 4-character type prefix (AKIA/ASIA/AIDA/etc.) and the
+        # last 4 characters visible, masking everything in between. The
+        # prefix identifies what *kind* of credential this is -- useful on
+        # its own (e.g. a policy that requires rotating STS session keys
+        # specifically needs to tell an ASIA- key apart from an AKIA- one)
+        # -- and reveals nothing about the secret part of the ID, unlike
+        # exposing more of the random suffix would. The last 4 characters
+        # keep the existing "tell two different keys apart" property.
+        if len(text) <= 8:
             return []
-        return [(0, len(text) - 4)]
+        return [(4, len(text) - 4)]
     if span.entity_type == EntityType.PHONE_NUMBER:
         # Every digit is redacted completely; separators are left visible.
         return _contiguous_ranges([ch.isdigit() for ch in text])
     if span.entity_type == EntityType.PERSON_NAME:
-        # Keep the first 4 characters.
-        if len(text) <= 4:
-            return []
-        return [(4, len(text))]
+        # How many leading characters stay visible scales with the name's
+        # length, rather than a flat 4 -- found via a real document where
+        # Claude correctly identified a 4-character name ("Sebb"), and the
+        # old flat "keep first 4" rule masked *nothing at all* for it (there
+        # was nothing left after the first 4 characters to hide), which the
+        # post-redaction verification pass correctly caught and failed the
+        # file over. <=4 chars keep 1, 5-6 keep 2, 7-8 keep 3, 9+ keep 4.
+        length = len(text)
+        if length <= 4:
+            keep = 1
+        elif length <= 6:
+            keep = 2
+        elif length <= 8:
+            keep = 3
+        else:
+            keep = 4
+        return [(keep, length)]
     if span.entity_type in _FULL_REDACTION_TYPES:
         return [(0, len(text))]
     raise ValueError(f"no redaction rule registered for entity type {span.entity_type!r}")

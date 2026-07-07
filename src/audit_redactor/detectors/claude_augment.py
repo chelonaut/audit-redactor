@@ -46,9 +46,12 @@ _ENTITY_TYPES = (EntityType.PERSON_NAME, EntityType.COMPANY_NAME)
 _TOOL = {
     "name": "report_pii_spans",
     "description": (
-        'Report every person name and company/organization name mentioned in '
-        'the document that is NOT already hidden behind a "(REDACTED)" '
-        "placeholder or a run of x characters."
+        "Report every DISTINCT person name and company/organization name "
+        'mentioned anywhere in the document that is NOT already hidden '
+        'behind a "(REDACTED)" placeholder or a run of x characters. Report '
+        "each distinct name only once, even if it appears many times in the "
+        "document -- every literal occurrence will be located and redacted "
+        "automatically downstream, so there is no need to enumerate repeats."
     ),
     "strict": True,
     "input_schema": {
@@ -86,11 +89,21 @@ _SYSTEM_PROMPT = (
     "You will be shown a document whose sensitive spans have already been "
     'redacted -- replaced with the literal placeholder "(REDACTED)" or '
     "masked with runs of the letter x. Find any remaining PERSON names or "
-    "COMPANY/organization names in the visible text that were missed. Call "
-    "report_pii_spans with every one you find, as exact verbatim substrings "
-    "(do not include surrounding words, do not paraphrase or normalize). Do "
-    "not report anything inside an already-redacted span. If you find "
-    "nothing, call the tool with an empty spans list."
+    "COMPANY/organization names in the visible text that were missed.\n\n"
+    "Some documents (exported tables, issue trackers, logs) contain dozens "
+    "or hundreds of rows repeating a much smaller set of distinct names -- "
+    "you only need to report each distinct name ONCE; every literal "
+    "occurrence in the document will be found and redacted automatically "
+    "afterward, so there is no need to track or list repeats yourself. Read "
+    "the ENTIRE document from beginning to end before responding -- do not "
+    "stop partway through a long table or list. A name missed here is a "
+    "real information leak, so completeness matters more than a short "
+    "answer: if a document genuinely contains dozens of distinct names, "
+    "report all of them.\n\n"
+    "Call report_pii_spans with every one you find, as exact verbatim "
+    "substrings (do not include surrounding words, do not paraphrase or "
+    "normalize). Do not report anything inside an already-redacted span. If "
+    "you find nothing, call the tool with an empty spans list."
 )
 
 

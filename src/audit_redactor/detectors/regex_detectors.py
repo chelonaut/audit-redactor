@@ -24,25 +24,40 @@ _AWS_ACCOUNT_RE = re.compile(
     r"|(?<!\d)(?P<bare_id>\d{4}-\d{4}-\d{4}|\d{12})(?!\d)"
 )
 
-# AWS access key IDs are always exactly 20 characters: one of a fixed set of
+# AWS access key IDs and IAM unique identifiers: one of a fixed set of
 # 4-letter type prefixes (sourced from AWS's own "unique identifiers" docs --
-# not guaranteed exhaustive if AWS ever adds a new prefix) followed by 16
-# uppercase alphanumeric characters. AKIA (long-term access key) and ASIA
-# (temporary/STS access key) are the two seen day to day; the rest identify
-# other IAM resource types but share the exact same shape.
+# not guaranteed exhaustive if AWS ever adds a new prefix) followed by a long
+# run of uppercase alphanumeric characters. AKIA (long-term access key) and
+# ASIA (temporary/STS access key) are the two seen day to day; the rest
+# identify other IAM resource types (users, roles, groups, policies, ...).
+# The suffix length is a *minimum*, not an exact count: access keys are
+# always 20 characters total, but a real CloudTrail `principalId` in testing
+# (an AIDA-prefixed IAM user unique ID) was 21 characters -- AWS doesn't
+# guarantee every one of these ID types is exactly the same length, so an
+# open-ended minimum is used rather than risk silently missing a real ID a
+# character or two longer than the access-key baseline.
 _AWS_ACCESS_KEY_RE = re.compile(
     r"(?<![A-Z0-9])(?:ABIA|ACCA|AGPA|AIDA|AIPA|AKIA|ANPA|ANVA|APKA|AROA|ASCA|ASIA)"
-    r"[A-Z0-9]{16}(?![A-Z0-9])"
+    r"[A-Z0-9]{16,}(?![A-Z0-9])"
 )
 
 # Phone numbers are only matched when they carry a separator or a leading
 # "+" -- a bare 12-digit run is deliberately left to the AWS detector above,
 # so the two detectors don't disagree about the same digits (AWS masks all
-# but the last 4 digits; phone numbers are redacted completely).
+# but the last 4 digits; phone numbers are redacted completely). The
+# separator class is deliberately space/tab/dot/hyphen only, NOT `\s`
+# (which also matches newlines): PDF table-cell text extraction routinely
+# splits a single date across two lines (e.g. "07/Jul/" then "26" on the
+# next line), and `\s` let the phone regex stitch the trailing digits of one
+# unrelated line to the leading digits of the next into a fake phone number
+# -- found via a real document where this destroyed the year on every date
+# in an exported table. A real phone number is never legitimately split
+# across a literal line break, so excluding newlines costs no real recall.
+_PHONE_SEP = r"[ \t.-]"
 _PHONE_RE = re.compile(
     r"(?<!\w)(?:"
     r"\+\d{7,14}"
-    r"|(?:\+\d{1,3}[\s.-]?)?(?:\(\d{2,4}\)[\s.-]?)?\d{2,4}(?:[\s.-]\d{2,4}){1,3}"
+    rf"|(?:\+\d{{1,3}}{_PHONE_SEP}?)?(?:\(\d{{2,4}}\){_PHONE_SEP}?)?\d{{2,4}}(?:{_PHONE_SEP}\d{{2,4}}){{1,3}}"
     r")(?!\w)"
 )
 
