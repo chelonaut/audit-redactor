@@ -117,3 +117,27 @@ class TestMarkdownHandler:
 
         text = _extract_text(actual)
         assert "chelonaut" not in text
+
+    def test_fenced_code_block_preserves_line_breaks_and_indentation(self, tmp_path) -> None:
+        # Regression test: without the "fenced_code" markdown extension, a
+        # ``` block is misread as a single inline <code> span (not <pre>),
+        # whose language hint leaks into the visible text and whose
+        # newlines get collapsed onto one line when Chromium renders it --
+        # neither of which is a redaction bug, but both make the rendered
+        # output wrong compared to the source.
+        src = tmp_path / "notes.md"
+        src.write_text(
+            "```python\n"
+            "def notify():\n"
+            '    email = "jane.doe@example.com"\n'
+            "```\n",
+            encoding="utf-8",
+        )
+        dest = tmp_path / "out.md"
+
+        actual = redact_file(src, dest, True)
+
+        text = _extract_text(actual)
+        assert "python" not in text
+        assert "def notify():" in text
+        assert '    email = "(REDACTED)"' in text

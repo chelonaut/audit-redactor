@@ -51,7 +51,14 @@ def redact_markdown(input_path: Path, output_path: Path, offline: bool) -> Path:
     spans = detect_text_with_claude(text, offline, identity_detector=identity_detector)
     redacted_markdown = redact_text(text, spans)
 
-    body_html = markdown.markdown(redacted_markdown)
+    # Without the "fenced_code" extension, python-markdown's core parser
+    # doesn't understand ``` fences at all -- it misreads the whole block as
+    # a single inline <code> span with the language hint leaking in as
+    # literal text, and since a bare (non-<pre>) <code> tag doesn't preserve
+    # whitespace, Chromium collapses every line of real code onto one line
+    # when rendering to PDF. "fenced_code" produces a real <pre><code>
+    # block instead, which preserves line breaks and indentation correctly.
+    body_html = markdown.markdown(redacted_markdown, extensions=["fenced_code"])
     full_html = _HTML_TEMPLATE.format(body=body_html)
 
     render_and_finish_pdf(full_html, spans, pdf_output_path)
