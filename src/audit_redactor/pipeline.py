@@ -10,6 +10,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Callable
 
+from audit_redactor.appliers.filename import redact_filename
+
 # A handler redacts input_path, writes to (at or near) output_path, and returns
 # the actual path written -- which may differ from output_path when a handler
 # changes the file extension (e.g. Markdown/HTML rendered to PDF, phase 6).
@@ -35,7 +37,8 @@ def redact_file(input_path: Path, output_path: Path, offline: bool) -> Path:
     if handler is None:
         supported = ", ".join(sorted(_HANDLERS)) or "(none registered yet)"
         raise ValueError(f"unsupported file format '{ext}'. Supported: {supported}")
-    return handler(input_path, output_path, offline)
+    safe_output_path = redact_filename(output_path)
+    return handler(input_path, safe_output_path, offline)
 
 
 # Side-effecting import: populates _HANDLERS via each submodule's @register
