@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import re
 
+from audit_redactor.detectors.api_keys import API_KEY_DETECTORS
 from audit_redactor.detectors.base import EntityType, Span
 from audit_redactor.detectors.date_time import find_date_time_ranges
 
@@ -188,6 +189,7 @@ REGEX_DETECTORS = [
     EmailDetector(),
     UsernameMentionDetector(),
     UrlDetector(),
+    *API_KEY_DETECTORS,
 ]
 
 

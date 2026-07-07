@@ -2,9 +2,10 @@
 
 Hybrid, auditable tool that redacts sensitive data (AWS account numbers, AWS
 access key IDs, person names, usernames/emails, phone numbers, client company
-names, URLs) from documents before they're shared with auditors. Dates and
-times are preserved on purpose — see below. See `PLAN.md` for the full design
-and build phases.
+names, URLs, and API tokens for Slack/Atlassian/GitHub/Anthropic/OpenAI/
+Notion, plus JWTs) from documents before they're shared with auditors. Dates
+and times are preserved on purpose — see below. See `PLAN.md` for the full
+design and build phases.
 
 **Originals are never modified.** Every run reads from the input path and
 writes to a separate output path.
@@ -71,8 +72,14 @@ network failure, or `--offline` never blocks redaction, only reduces recall.
 | Emails / usernames | Regex | Full redaction |
 | Platform usernames identified from a profile/repo URL (e.g. `github.com/<user>`) | Cross-reference — see PLAN.md 2.3 | Full redaction |
 | URLs | Regex | Redact entire URL incl. scheme |
+| Slack tokens & webhooks, Atlassian (Jira/Confluence) tokens, GitHub tokens, Anthropic/OpenAI API keys, Notion tokens, JWTs | Regex — see PLAN.md 2.3 | Full redaction |
 | Person names | Curated regex/company-list pass + Claude augmentation | Obscure all but first 4 characters |
 | Client company names | Curated list (web-search-confirmed) + Claude augmentation | Full redaction |
+
+**Not detected, on purpose:** Atlassian Statuspage API keys (no identifiable
+prefix — plain random strings) and a distinct "Microsoft Copilot API key"
+(it authenticates via Entra ID JWTs, already covered above; Azure's own
+opaque keys have no fixed prefix). See PLAN.md 2.3 for the full reasoning.
 
 **Dates and times are never redacted, on purpose** — knowing *when* evidence
 is from matters for auditability. A date/time shape (`2026-07-06`, `17.55.28`,

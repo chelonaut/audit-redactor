@@ -46,8 +46,38 @@ marketplace repo.
 | Emails / usernames (GitHub, Jira, Notion, etc.) | Regex | Full redaction |
 | Platform usernames identified from a profile/repo URL (e.g. GitHub) | Cross-reference (detectors/platform_identity.py) | Full redaction |
 | URLs | Regex | Redact entire URL incl. scheme |
+| Slack tokens (`xoxb-`/`xoxp-`/`xapp-`/etc.) and incoming webhook URLs | Regex (detectors/api_keys.py) | Full redaction |
+| Atlassian Cloud API tokens (`ATATT3...` — covers Jira and Confluence) | Regex | Full redaction |
+| GitHub tokens (`ghp_`/`gho_`/`ghu_`/`ghs_`/`ghr_`/`github_pat_`) | Regex | Full redaction |
+| Anthropic API keys (`sk-ant-...`) | Regex | Full redaction |
+| OpenAI API keys (`sk-`/`sk-proj-`/`sk-svcacct-`) | Regex | Full redaction |
+| Notion tokens (`secret_...`/`ntn_...`) | Regex | Full redaction |
+| JWTs | Regex (structural — see below) | Full redaction |
 | Person names | Local NER (ab-ai/pii_model) + Claude augmentation | Obscure all but first 4 characters |
 | Client company names | Curated list (web-search-confirmed) + Claude augmentation | Full redaction |
+
+**Two commonly-requested token types are deliberately not detected, each for a stated reason
+(`detectors/api_keys.py`):** Atlassian Statuspage API keys have no identifiable prefix — they're
+plain random alphanumeric strings indistinguishable from any other opaque secret. Microsoft Copilot
+has no distinct API key of its own — it authenticates via Microsoft Entra ID (Azure AD), whose access
+tokens are JWTs (already covered above), and Azure's own opaque API keys (e.g. Cognitive Services)
+have no fixed prefix either.
+
+JWTs are matched structurally rather than by a fixed prefix belonging to one vendor: a JWT's header
+and payload segments are both JSON objects, and `{"` is virtually always how each begins — which
+base64url-encodes to the "eyJ" seen at the start of essentially every real-world JWT. Requiring both
+the header *and* payload segments (not just the header) to start with "eyJ" makes this precise enough
+without a checksum or a real structural JSON-decode step.
+
+Overlap between these new detectors and existing ones was checked, not just assumed away: OpenAI's
+`sk-` prefix and Anthropic's `sk-ant-` prefix share their first three characters, so the OpenAI regex
+uses a negative lookahead to guarantee it never matches (a prefix of) a real Anthropic key. A Slack
+webhook or any of these tokens embedded inside a URL's query string is also caught whole by the
+generic URL detector; the resulting same-range overlap is resolved by `merge_spans` (whichever
+detector ran first wins), but since every one of these types is full-redaction, the visible output is
+identical either way — only the recorded entity_type label for that one span could differ. None of the
+fixed prefixes collide with the AWS account/access key ID prefixes, the `@`-mention pattern, or each
+other.
 
 **Dates and times are deliberately never redacted, and are actively protected from the phone-number
 detector's separator-based pattern** (`detectors/date_time.py`): knowing *when* evidence is from is

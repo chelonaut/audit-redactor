@@ -22,12 +22,23 @@ PLACEHOLDER = "(REDACTED)"
 _MASK_CHAR = "x"
 
 # Entity types masked with a flat placeholder -- PLAN.md 2.3 calls these out
-# as "full redaction" rather than a partial/format-preserving mask.
+# as "full redaction" rather than a partial/format-preserving mask. Unlike
+# an AWS account/access key ID, none of these third-party API tokens need a
+# "show the last 4 characters" allowance, so the safer default (hide the
+# whole thing) applies to all of them.
 _FULL_REDACTION_TYPES = {
     EntityType.EMAIL,
     EntityType.USERNAME_MENTION,
     EntityType.URL,
     EntityType.COMPANY_NAME,
+    EntityType.SLACK_TOKEN,
+    EntityType.SLACK_WEBHOOK,
+    EntityType.ATLASSIAN_API_TOKEN,
+    EntityType.GITHUB_TOKEN,
+    EntityType.ANTHROPIC_API_KEY,
+    EntityType.OPENAI_API_KEY,
+    EntityType.NOTION_TOKEN,
+    EntityType.JWT,
 }
 
 
