@@ -23,11 +23,11 @@ from __future__ import annotations
 import json
 import re
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 
 from audit_redactor.appliers.output_guard import ensure_output_does_not_exist
 from audit_redactor.appliers.text import PLACEHOLDER, redact_text
-from audit_redactor.detectors import detect_text
+from audit_redactor.detectors import KnownIdentityDetector, detect_text, find_identity_usernames
 from audit_redactor.pipeline import register
 
 # Supplementary check per PLAN.md 2.6: a key name alone (e.g. "accountId")
@@ -44,15 +44,26 @@ def _is_sensitive_key(key: str) -> bool:
     return bool(_SENSITIVE_KEY_RE.search(key))
 
 
-def _redact_value(key: str | None, value: Any) -> Any:
+def _iter_string_leaves(value: Any) -> Iterator[str]:
     if isinstance(value, dict):
-        return {k: _redact_value(k, v) for k, v in value.items()}
+        for v in value.values():
+            yield from _iter_string_leaves(v)
+    elif isinstance(value, list):
+        for item in value:
+            yield from _iter_string_leaves(item)
+    elif isinstance(value, str):
+        yield value
+
+
+def _redact_value(key: str | None, value: Any, identity_detector: KnownIdentityDetector) -> Any:
+    if isinstance(value, dict):
+        return {k: _redact_value(k, v, identity_detector) for k, v in value.items()}
     if isinstance(value, list):
-        return [_redact_value(key, item) for item in value]
+        return [_redact_value(key, item, identity_detector) for item in value]
     if isinstance(value, str):
         if key is not None and _is_sensitive_key(key):
             return PLACEHOLDER
-        return redact_text(value, detect_text(value))
+        return redact_text(value, detect_text(value, identity_detector=identity_detector))
     return value
 
 
@@ -60,7 +71,13 @@ def _redact_value(key: str | None, value: Any) -> Any:
 def redact_json(input_path: Path, output_path: Path, offline: bool) -> Path:
     ensure_output_does_not_exist(output_path)
     data = json.loads(input_path.read_text(encoding="utf-8"))
-    redacted = _redact_value(None, data)
+    # First walk: gather every string leaf (regardless of key) purely to
+    # discover identity usernames -- e.g. a "url" field pointing at a GitHub
+    # profile revealing that a sibling "author" field's bare value is the
+    # same person, with no Claude call involved (JSON never gets the
+    # augmentation pass -- see module docstring).
+    identity_detector = KnownIdentityDetector(find_identity_usernames(_iter_string_leaves(data)))
+    redacted = _redact_value(None, data, identity_detector)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(json.dumps(redacted, indent=2) + "\n", encoding="utf-8")
     return output_path

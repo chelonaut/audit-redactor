@@ -39,6 +39,7 @@ from audit_redactor.appliers.pdf import strip_pdf_metadata, verify_pdf_redacted
 from audit_redactor.appliers.text import redact_char_ranges
 from audit_redactor.detectors import detect_text, detect_text_with_claude
 from audit_redactor.detectors.base import EntityType, Span
+from audit_redactor.detectors.platform_identity import KnownIdentityDetector, find_identity_usernames
 from audit_redactor.pipeline import register
 
 _REDACT_FILL = (0, 0, 0)
@@ -84,7 +85,7 @@ def _redact_rects_for_span(span: Span, char_bboxes: list[fitz.Rect]) -> list[fit
     return rects
 
 
-def _strip_sensitive_links(page: "fitz.Page") -> None:
+def _strip_sensitive_links(page: "fitz.Page", identity_detector: KnownIdentityDetector) -> None:
     """Delete any hyperlink whose target URI leaks sensitive data.
 
     `apply_redactions()` only touches the page's visible content stream --
@@ -105,13 +106,15 @@ def _strip_sensitive_links(page: "fitz.Page") -> None:
     otherwise flag and delete every single external link regardless of
     whether it actually leaks anything. What matters is any *other* entity
     type found embedded within it (an account ID, email, phone number,
-    username, or curated company name in the path/query).
+    username, curated company name, or an already-identified platform
+    username -- see detectors/platform_identity.py -- in the path/query).
     """
     for link in list(page.get_links()):
         uri = link.get("uri")
         if not uri:
             continue
-        if any(span.entity_type != EntityType.URL for span in detect_text(uri)):
+        spans = detect_text(uri, identity_detector=identity_detector)
+        if any(span.entity_type != EntityType.URL for span in spans):
             page.delete_link(link)
 
 
@@ -124,7 +127,9 @@ def _is_scanned_page(page: "fitz.Page", text: str) -> bool:
     return len(text.strip()) < _SCANNED_PAGE_TEXT_THRESHOLD and bool(page.get_images(full=True))
 
 
-def _redact_scanned_page(doc: "fitz.Document", page_index: int, offline: bool) -> list[Span]:
+def _redact_scanned_page(
+    doc: "fitz.Document", page_index: int, offline: bool, identity_detector: KnownIdentityDetector
+) -> list[Span]:
     """Render a scanned page to a raster, redact it via the same OCR
     pipeline the standalone image handler uses, then replace the page
     entirely with the redacted raster.
@@ -140,13 +145,19 @@ def _redact_scanned_page(doc: "fitz.Document", page_index: int, offline: bool) -
     along with it -- an accepted trade-off, since a link's safety can't be
     verified on an image-only page beyond the OCR text check already applied
     to the visible content.
+
+    `identity_detector` is built from usernames discovered elsewhere in the
+    document (real text/link targets, not OCR) -- a scanned page can't
+    *discover* a new username itself (see platform_identity.py's
+    limitations), but it can still have an already-known one redacted if it
+    happens to also appear in this page's OCR'd text.
     """
     page = doc[page_index]
     rect = page.rect
     pix = page.get_pixmap(matrix=fitz.Matrix(_SCAN_RENDER_ZOOM, _SCAN_RENDER_ZOOM))
     image = Image.open(io.BytesIO(pix.tobytes("png"))).convert("RGB")
 
-    redacted_image, spans = ocr_redact_image(image, offline)
+    redacted_image, spans = ocr_redact_image(image, offline, identity_detector=identity_detector)
 
     buf = io.BytesIO()
     redacted_image.save(buf, format="PNG")
@@ -167,26 +178,48 @@ def redact_pdf(input_path: Path, output_path: Path, offline: bool) -> Path:
         cat = doc.pdf_catalog()
         doc.xref_set_key(cat, "OCProperties", "null")
 
+        # First pass: extract every page's text/char-map once and note which
+        # pages are scanned, purely to build one identity-username set for
+        # the whole document (platform_identity.py) before any real
+        # redaction work happens -- a username can be the target of a link
+        # on page 1 and a bare, unlinked mention on page 3, so this has to
+        # see the whole document before deciding what "chelonaut" means.
+        # Scanned pages' OCR text isn't available yet at this point (that
+        # only happens during the real per-page redaction pass below), so
+        # they don't contribute to discovery -- see platform_identity.py's
+        # documented limitation on screenshot-only usernames.
+        pages_info: list[tuple[str, list[fitz.Rect], bool]] = []
+        discovery_texts: list[str] = []
+        for page_index in range(len(doc)):
+            page = doc[page_index]
+            text, char_bboxes = _page_text_and_char_map(page)
+            scanned = _is_scanned_page(page, text)
+            pages_info.append((text, char_bboxes, scanned))
+            if not scanned:
+                discovery_texts.append(text)
+            discovery_texts.extend(link["uri"] for link in page.get_links() if link.get("uri"))
+
+        identity_detector = KnownIdentityDetector(find_identity_usernames(discovery_texts))
+
         spans_by_page: list[list[Span]] = []
         # Fixed upfront: a scanned-page replacement deletes and re-inserts a
         # page at the same index, leaving the total page count (and every
         # other page's index) unchanged, so iterating a pre-computed range
         # stays valid throughout.
-        for page_index in range(len(doc)):
+        for page_index, (text, char_bboxes, scanned) in enumerate(pages_info):
             page = doc[page_index]
-            text, char_bboxes = _page_text_and_char_map(page)
-            if _is_scanned_page(page, text):
-                spans = _redact_scanned_page(doc, page_index, offline)
+            if scanned:
+                spans = _redact_scanned_page(doc, page_index, offline, identity_detector)
                 spans_by_page.append(spans)
                 continue
-            spans = detect_text_with_claude(text, offline)
+            spans = detect_text_with_claude(text, offline, identity_detector=identity_detector)
             spans_by_page.append(spans)
             for span in spans:
                 for rect in _redact_rects_for_span(span, char_bboxes):
                     page.add_redact_annot(rect, fill=_REDACT_FILL)
             if spans:
                 page.apply_redactions()
-            _strip_sensitive_links(page)
+            _strip_sensitive_links(page, identity_detector)
 
         strip_pdf_metadata(doc)
 

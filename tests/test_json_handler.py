@@ -88,3 +88,26 @@ class TestJsonHandler:
 
         # A misconfigured input==output invocation must never mutate the original.
         assert src.read_text(encoding="utf-8") == original
+
+    def test_discovers_username_from_one_field_and_redacts_bare_mention_in_another(
+        self, tmp_path
+    ) -> None:
+        src = tmp_path / "record.json"
+        src.write_text(
+            json.dumps(
+                {
+                    "profile_url": "https://github.com/chelonaut",
+                    "author": "chelonaut",
+                    "note": "reviewed by chelonaut yesterday",
+                }
+            ),
+            encoding="utf-8",
+        )
+        dest = tmp_path / "out.json"
+
+        redact_file(src, dest, True)
+
+        redacted = json.loads(dest.read_text(encoding="utf-8"))
+        assert "chelonaut" not in redacted["profile_url"]
+        assert redacted["author"] == "(REDACTED)"
+        assert "chelonaut" not in redacted["note"]

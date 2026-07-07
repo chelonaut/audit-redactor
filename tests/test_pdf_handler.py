@@ -208,6 +208,60 @@ class TestSensitiveLinks:
         assert links[0]["uri"] == "https://example.com/report"
         result.close()
 
+    def test_link_uri_revealing_identified_username_is_removed(self, tmp_path) -> None:
+        # A GitHub profile/repo link is a signal that "chelonaut" is a
+        # username (platform_identity.py) even though the link URI itself
+        # matches nothing else (no AWS ID/email/phone/company).
+        src = tmp_path / "doc.pdf"
+        doc = fitz.open()
+        page = doc.new_page()
+        page.insert_text((72, 72), "chelonaut")
+        page.insert_link(
+            {
+                "kind": fitz.LINK_URI,
+                "from": fitz.Rect(72, 90, 300, 110),
+                "uri": "https://github.com/chelonaut/claude-news-aggregator-prompt/commits?author=chelonaut",
+            }
+        )
+        doc.save(src)
+        doc.close()
+        dest = tmp_path / "out.pdf"
+
+        redact_file(src, dest, True)
+
+        result = fitz.open(dest)
+        assert result[0].get_links() == []
+        result.close()
+        assert b"chelonaut" not in dest.read_bytes()
+
+
+class TestIdentityDiscoveryAcrossPages:
+    def test_username_from_page_one_link_redacts_bare_mention_on_page_two(self, tmp_path) -> None:
+        src = tmp_path / "doc.pdf"
+        doc = fitz.open()
+        page1 = doc.new_page()
+        page1.insert_text((72, 72), "chelonaut")
+        page1.insert_link(
+            {
+                "kind": fitz.LINK_URI,
+                "from": fitz.Rect(72, 60, 200, 90),
+                "uri": "https://github.com/chelonaut",
+            }
+        )
+        page2 = doc.new_page()
+        page2.insert_text((72, 72), "chelonaut authored this with no link at all")
+        doc.save(src)
+        doc.close()
+        dest = tmp_path / "out.pdf"
+
+        redact_file(src, dest, True)
+
+        result = fitz.open(dest)
+        full_text = "".join(p.get_text() for p in result)
+        result.close()
+        assert "chelonaut" not in full_text
+        assert b"chelonaut" not in dest.read_bytes()
+
 
 class TestScannedPage:
     """A "scanned" page: its entire content is a raster image with no real,

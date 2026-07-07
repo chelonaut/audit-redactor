@@ -103,3 +103,17 @@ class TestMarkdownHandler:
             redact_file(src, dest, True)
 
         assert actual_output.read_bytes() == prior_bytes
+
+    def test_discovers_username_from_link_and_redacts_bare_mention(self, tmp_path) -> None:
+        src = tmp_path / "notes.md"
+        src.write_text(
+            "See [my profile](https://github.com/chelonaut) for more.\n"
+            "chelonaut is the author of this repo.\n",
+            encoding="utf-8",
+        )
+        dest = tmp_path / "out.md"
+
+        actual = redact_file(src, dest, True)
+
+        text = _extract_text(actual)
+        assert "chelonaut" not in text

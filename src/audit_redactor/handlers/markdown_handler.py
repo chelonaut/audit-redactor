@@ -19,7 +19,7 @@ import markdown
 from audit_redactor.appliers.html_render import render_and_finish_pdf
 from audit_redactor.appliers.output_guard import ensure_output_does_not_exist
 from audit_redactor.appliers.text import redact_text
-from audit_redactor.detectors import detect_text_with_claude
+from audit_redactor.detectors import KnownIdentityDetector, detect_text_with_claude, find_identity_usernames
 from audit_redactor.pipeline import register
 
 _HTML_TEMPLATE = """<!DOCTYPE html>
@@ -44,7 +44,11 @@ def redact_markdown(input_path: Path, output_path: Path, offline: bool) -> Path:
     ensure_output_does_not_exist(pdf_output_path)
 
     text = input_path.read_text(encoding="utf-8")
-    spans = detect_text_with_claude(text, offline)
+    # A markdown link's URL is literal text in the source (unlike HTML's
+    # separate href attribute), so a single scan of `text` covers both
+    # discovery and redaction -- no second pass needed.
+    identity_detector = KnownIdentityDetector(find_identity_usernames([text]))
+    spans = detect_text_with_claude(text, offline, identity_detector=identity_detector)
     redacted_markdown = redact_text(text, spans)
 
     body_html = markdown.markdown(redacted_markdown)

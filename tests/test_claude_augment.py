@@ -5,6 +5,8 @@ from audit_redactor.detectors.claude_augment import (
     claude_api_key_available,
     run_claude_augmentation,
 )
+from audit_redactor.detectors.platform_identity import KnownIdentityDetector
+from audit_redactor.detectors.text import detect_text
 
 
 class _FakeToolUseBlock:
@@ -151,3 +153,51 @@ class TestRunClaudeAugmentation:
         sent_text = client.messages.calls[0]["messages"][0]["content"]
         assert "jane@example.com" not in sent_text
         assert "Jane Doe" in sent_text
+
+
+class TestIdentityDetectorClaudeOrdering:
+    """Regression coverage for a real bug caught before it shipped: merging
+    `KnownIdentityDetector` spans in *after* `detect_text_with_claude`
+    returns (rather than threading them through `detect_text` as
+    `detect_text_with_claude` does) would let Claude see an identified
+    username in plaintext and independently report it too -- e.g. as
+    PERSON_NAME, whose masking rule keeps the first 4 characters, unlike
+    USERNAME_MENTION's full redaction. Whichever span won the resulting
+    overlap in `merge_spans` could then leave part of the username visible.
+    These tests exercise the fix at the level `detect_text_with_claude`
+    itself can't be unit-tested at (it takes no injectable `client`): compose
+    spans the same way it does, then verify Claude never even sees the
+    identified username, and that a same-text competing report from Claude
+    would be rejected as already covered even if it somehow occurred.
+    """
+
+    def test_identified_username_is_masked_before_claude_sees_the_text(self) -> None:
+        text = "Contact chelonaut for details."
+        identity_detector = KnownIdentityDetector({"chelonaut"})
+        existing = detect_text(text, identity_detector=identity_detector)
+
+        client = _FakeClient(_tool_response([]))
+        run_claude_augmentation(text, existing, offline=False, api_key="sk-ant-test", client=client)
+
+        sent_text = client.messages.calls[0]["messages"][0]["content"]
+        assert "chelonaut" not in sent_text
+        assert "(REDACTED)" in sent_text
+
+    def test_claude_reporting_the_same_span_is_rejected_as_already_covered(self) -> None:
+        # Even if Claude ignored the masked placeholder and still reported
+        # the name (e.g. by copying it from elsewhere in its own reasoning),
+        # the grounding/exclude check must drop it -- proving no duplicate,
+        # differently-typed span for the same text can ever reach
+        # merge_spans.
+        text = "Contact chelonaut for details."
+        identity_detector = KnownIdentityDetector({"chelonaut"})
+        existing = detect_text(text, identity_detector=identity_detector)
+
+        client = _FakeClient(_tool_response([{"text": "chelonaut", "entity_type": "PERSON_NAME"}]))
+        claude_spans = run_claude_augmentation(
+            text, existing, offline=False, api_key="sk-ant-test", client=client
+        )
+
+        assert claude_spans == []
+        entity_types = {span.entity_type for span in existing}
+        assert entity_types == {EntityType.USERNAME_MENTION}

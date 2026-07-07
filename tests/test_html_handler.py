@@ -55,6 +55,52 @@ class TestRedactHtmlSource:
         assert len(spans) == 1
         assert spans[0].text == "jane@example.com"
 
+    def test_strips_href_leaking_sensitive_data_but_keeps_visible_text(self) -> None:
+        # Verified empirically that Chromium's PDF export preserves href as a
+        # real, clickable PDF link annotation regardless of what the anchor's
+        # visible text says -- so the attribute must be scrubbed at the HTML
+        # source, not just whatever text happens to be visible.
+        html = '<html><body><a href="https://example.com/account/123456789012">click here</a></body></html>'
+        redacted, _ = redact_html_source(html)
+        assert "123456789012" not in redacted
+        assert "click here" in redacted
+
+    def test_strips_src_leaking_sensitive_data(self) -> None:
+        html = '<html><body><img src="https://example.com/track?email=jane@example.com"></body></html>'
+        redacted, _ = redact_html_source(html)
+        assert "jane@example.com" not in redacted
+
+    def test_benign_href_is_left_untouched(self) -> None:
+        html = '<html><body><a href="https://example.com/public-page">link</a></body></html>'
+        redacted, _ = redact_html_source(html)
+        assert 'href="https://example.com/public-page"' in redacted
+
+    def test_discovers_username_from_href_and_redacts_bare_mention_elsewhere(self) -> None:
+        # The core new feature: a username is only ever *evidenced* by a
+        # profile URL in an href with unrelated visible text, but a bare,
+        # unlinked mention of the same name elsewhere in the document must
+        # still be found and redacted.
+        html = (
+            "<html><body>"
+            '<a href="https://github.com/chelonaut/secret-repo">click here</a>'
+            "<p>chelonaut mentioned again with no link</p>"
+            "</body></html>"
+        )
+        redacted, spans = redact_html_source(html)
+        assert "chelonaut" not in redacted
+        assert "click here" in redacted
+        assert any(span.text == "chelonaut" for span in spans)
+
+    def test_discovers_username_from_img_src(self) -> None:
+        html = (
+            "<html><body>"
+            '<img src="https://github.com/chelonaut">'
+            "<p>Reviewed by chelonaut.</p>"
+            "</body></html>"
+        )
+        redacted, _ = redact_html_source(html)
+        assert "chelonaut" not in redacted
+
 
 class TestHtmlHandler:
     def test_redacts_all_detector_types_and_renders_to_pdf(self, tmp_path) -> None:

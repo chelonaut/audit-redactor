@@ -138,6 +138,12 @@ class UrlDetector:
         return spans
 
 
+# Exposed for detectors/platform_identity.py's identity-URL discovery, which
+# needs to find the same URLs this module already matches without
+# duplicating the regex.
+URL_PATTERNS = (_SCHEME_URL_RE, _WWW_URL_RE)
+
+
 REGEX_DETECTORS = [
     AwsAccountIdDetector(),
     PhoneNumberDetector(),

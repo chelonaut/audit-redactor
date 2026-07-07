@@ -63,7 +63,7 @@ import pytesseract
 from PIL import Image, ImageDraw, ImageOps
 
 from audit_redactor.detectors import detect_text_with_claude
-from audit_redactor.detectors.base import Span
+from audit_redactor.detectors.base import Detector, Span
 
 _OCR_UPSCALE = 3
 _AUTOCONTRAST_CUTOFF = 1
@@ -214,7 +214,9 @@ def verify_redacted(image: Image.Image, spans: list[Span]) -> None:
             )
 
 
-def ocr_redact_image(image: Image.Image, offline: bool) -> tuple[Image.Image, list[Span]]:
+def ocr_redact_image(
+    image: Image.Image, offline: bool, identity_detector: Detector | None = None
+) -> tuple[Image.Image, list[Span]]:
     """Full OCR-detect-redact-verify pipeline for a single raster image.
 
     `image` must already be in a mode `ImageDraw`/`tobytes` can round-trip
@@ -222,9 +224,18 @@ def ocr_redact_image(image: Image.Image, offline: bool) -> tuple[Image.Image, li
     this; the PDF handler's scanned-page path renders pages directly to
     RGB). Returns the redacted, metadata-free image plus the spans that were
     found, for the caller to embed however its own format requires.
+
+    `identity_detector` lets a caller merge in usernames discovered from
+    context this function can't see itself -- e.g. the PDF handler's
+    scanned-page path passing a `KnownIdentityDetector` built from usernames
+    discovered elsewhere in the same document (platform_identity.py). Passed
+    through to `detect_text_with_claude` rather than merged in afterwards --
+    see that function's docstring for why the ordering matters. The
+    standalone image handler has no such document-level context, so it never
+    passes one.
     """
     text, word_spans = reconstruct_text_and_word_map(image)
-    spans = detect_text_with_claude(text, offline)
+    spans = detect_text_with_claude(text, offline, identity_detector=identity_detector)
     redacted = redact_pixels(image, spans, word_spans)
     fresh = fresh_copy(redacted)
     verify_redacted(fresh, spans)
