@@ -24,49 +24,68 @@ _FULL_REDACTION_TYPES = {
 }
 
 
-def _mask_aws_account_id(matched: str) -> str:
-    """Mask all but the last 4 digits, preserving any separators.
+def _contiguous_ranges(flags: list[bool]) -> list[tuple[int, int]]:
+    """Turn a per-character boolean list into a list of (start, end) runs of True."""
+    ranges = []
+    start: int | None = None
+    for i, flag in enumerate(flags):
+        if flag and start is None:
+            start = i
+        elif not flag and start is not None:
+            ranges.append((start, i))
+            start = None
+    if start is not None:
+        ranges.append((start, len(flags)))
+    return ranges
 
-    Handles both forms the detector emits: a bare 12-digit run
-    (`123456789012` -> `********9012`) and AWS console's 4-4-4 hyphenated
-    display format (`1234-5678-9012` -> `****-****-9012`).
+
+def redact_char_ranges(span: Span) -> list[tuple[int, int]]:
+    """Return the (start, end) character ranges *within `span.text`* that must
+    be hidden, per PLAN.md 2.3's per-entity masking rules.
+
+    This is the single source of truth for "which characters are sensitive
+    within a matched span" -- `apply_span_text` below uses it to build a
+    masked replacement string, and the PDF handler (phase 4) uses it directly
+    to know which character bboxes to redact, so the two can never disagree
+    about what's actually hidden.
     """
-    digit_count = sum(1 for ch in matched if ch.isdigit())
-    keep_from = digit_count - 4
-    out = []
-    seen = 0
-    for ch in matched:
-        if ch.isdigit():
-            out.append(ch if seen >= keep_from else "*")
-            seen += 1
-        else:
-            out.append(ch)
-    return "".join(out)
-
-
-def _mask_phone_number(matched: str) -> str:
-    """Redact every digit completely, preserving separators/punctuation."""
-    return "".join("*" if ch.isdigit() else ch for ch in matched)
-
-
-def _mask_person_name(matched: str) -> str:
-    """Obscure all but the first 4 characters."""
-    if len(matched) <= 4:
-        return matched
-    return matched[:4] + "*" * (len(matched) - 4)
+    text = span.text
+    if span.entity_type == EntityType.AWS_ACCOUNT_ID:
+        # Keep the last 4 digits; separators are never redacted themselves.
+        digit_count = sum(1 for ch in text if ch.isdigit())
+        keep_from = digit_count - 4
+        seen = 0
+        flags = []
+        for ch in text:
+            if ch.isdigit():
+                flags.append(seen < keep_from)
+                seen += 1
+            else:
+                flags.append(False)
+        return _contiguous_ranges(flags)
+    if span.entity_type == EntityType.PHONE_NUMBER:
+        # Every digit is redacted completely; separators are left visible.
+        return _contiguous_ranges([ch.isdigit() for ch in text])
+    if span.entity_type == EntityType.PERSON_NAME:
+        # Keep the first 4 characters.
+        if len(text) <= 4:
+            return []
+        return [(4, len(text))]
+    if span.entity_type in _FULL_REDACTION_TYPES:
+        return [(0, len(text))]
+    raise ValueError(f"no redaction rule registered for entity type {span.entity_type!r}")
 
 
 def apply_span_text(span: Span) -> str:
     """Return the masked replacement text for a single span, per PLAN.md 2.3."""
-    if span.entity_type == EntityType.AWS_ACCOUNT_ID:
-        return _mask_aws_account_id(span.text)
-    if span.entity_type == EntityType.PHONE_NUMBER:
-        return _mask_phone_number(span.text)
-    if span.entity_type == EntityType.PERSON_NAME:
-        return _mask_person_name(span.text)
     if span.entity_type in _FULL_REDACTION_TYPES:
         return _PLACEHOLDER
-    raise ValueError(f"no text applier registered for entity type {span.entity_type!r}")
+    ranges = redact_char_ranges(span)
+    hidden = [False] * len(span.text)
+    for start, end in ranges:
+        for i in range(start, end):
+            hidden[i] = True
+    return "".join("*" if is_hidden else ch for ch, is_hidden in zip(span.text, hidden))
 
 
 def merge_spans(spans: list[Span]) -> list[Span]:
