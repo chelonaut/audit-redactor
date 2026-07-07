@@ -139,6 +139,28 @@ class TestImageHandler:
         text = pytesseract.image_to_string(Image.open(dest))
         assert "jane@example.com" not in text
 
+    def test_declines_to_overwrite_existing_output(self, tmp_path) -> None:
+        src = tmp_path / "doc.png"
+        _make_image(src, ["Contact jane@example.com"])
+        dest = tmp_path / "out.png"
+        _make_image(dest, ["unrelated prior output"])
+        prior_bytes = dest.read_bytes()
+
+        with pytest.raises(FileExistsError):
+            redact_file(src, dest, True)
+
+        assert dest.read_bytes() == prior_bytes
+
+    def test_declines_when_output_path_is_the_input_path(self, tmp_path) -> None:
+        src = tmp_path / "doc.png"
+        _make_image(src, ["Contact jane@example.com"])
+        original_bytes = src.read_bytes()
+
+        with pytest.raises(FileExistsError):
+            redact_file(src, src, True)
+
+        assert src.read_bytes() == original_bytes
+
 
 class TestVerifyRedacted:
     def test_raises_when_span_text_still_recoverable(self) -> None:

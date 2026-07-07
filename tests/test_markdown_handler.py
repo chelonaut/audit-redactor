@@ -1,4 +1,5 @@
 import fitz
+import pytest
 
 from audit_redactor.pipeline import redact_file
 
@@ -86,3 +87,19 @@ class TestMarkdownHandler:
         assert "xxxxxxxx9012" in text
         assert "xxx-xxx-xxxx" in text
         assert "(REDACTED)" in text
+
+    def test_declines_to_overwrite_existing_output(self, tmp_path) -> None:
+        src = tmp_path / "notes.md"
+        src.write_text("Contact jane.doe@example.com.\n", encoding="utf-8")
+        # The handler always renders to a .pdf regardless of the requested
+        # extension -- the guard must check that *actual* final path, not
+        # the literal "out.md" passed in.
+        dest = tmp_path / "out.md"
+        actual_output = tmp_path / "out.pdf"
+        actual_output.write_bytes(b"%PDF-1.4 unrelated prior output")
+        prior_bytes = actual_output.read_bytes()
+
+        with pytest.raises(FileExistsError):
+            redact_file(src, dest, True)
+
+        assert actual_output.read_bytes() == prior_bytes

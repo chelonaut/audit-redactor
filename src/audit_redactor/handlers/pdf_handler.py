@@ -34,6 +34,7 @@ import fitz
 from PIL import Image
 
 from audit_redactor.appliers.image_ocr import ocr_redact_image
+from audit_redactor.appliers.output_guard import ensure_output_does_not_exist
 from audit_redactor.appliers.pdf import strip_pdf_metadata, verify_pdf_redacted
 from audit_redactor.appliers.text import redact_char_ranges
 from audit_redactor.detectors import detect_text, detect_text_with_claude
@@ -158,6 +159,7 @@ def _redact_scanned_page(doc: "fitz.Document", page_index: int, offline: bool) -
 
 @register(".pdf")
 def redact_pdf(input_path: Path, output_path: Path, offline: bool) -> Path:
+    ensure_output_does_not_exist(output_path)
     doc = fitz.open(input_path)
     try:
         # Must happen before any per-page text extraction below, so hidden

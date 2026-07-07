@@ -22,6 +22,7 @@ from pathlib import Path
 from bs4 import BeautifulSoup, Comment
 
 from audit_redactor.appliers.html_render import render_and_finish_pdf
+from audit_redactor.appliers.output_guard import ensure_output_does_not_exist
 from audit_redactor.appliers.text import redact_text
 from audit_redactor.detectors import detect_text_with_claude
 from audit_redactor.detectors.base import Span
@@ -69,9 +70,11 @@ def redact_html_source(html: str, offline: bool = True) -> tuple[str, list[Span]
 
 @register(".html", ".htm")
 def redact_html(input_path: Path, output_path: Path, offline: bool) -> Path:
+    pdf_output_path = output_path.with_suffix(".pdf")
+    ensure_output_does_not_exist(pdf_output_path)
+
     html = input_path.read_text(encoding="utf-8")
     redacted_html, spans = redact_html_source(html, offline)
 
-    pdf_output_path = output_path.with_suffix(".pdf")
     render_and_finish_pdf(redacted_html, spans, pdf_output_path)
     return pdf_output_path

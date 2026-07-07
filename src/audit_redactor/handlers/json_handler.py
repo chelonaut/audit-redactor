@@ -25,6 +25,7 @@ import re
 from pathlib import Path
 from typing import Any
 
+from audit_redactor.appliers.output_guard import ensure_output_does_not_exist
 from audit_redactor.appliers.text import PLACEHOLDER, redact_text
 from audit_redactor.detectors import detect_text
 from audit_redactor.pipeline import register
@@ -57,6 +58,7 @@ def _redact_value(key: str | None, value: Any) -> Any:
 
 @register(".json")
 def redact_json(input_path: Path, output_path: Path, offline: bool) -> Path:
+    ensure_output_does_not_exist(output_path)
     data = json.loads(input_path.read_text(encoding="utf-8"))
     redacted = _redact_value(None, data)
     output_path.parent.mkdir(parents=True, exist_ok=True)

@@ -13,11 +13,13 @@ from pathlib import Path
 from PIL import Image
 
 from audit_redactor.appliers.image_ocr import ocr_redact_image
+from audit_redactor.appliers.output_guard import ensure_output_does_not_exist
 from audit_redactor.pipeline import register
 
 
 @register(".png", ".jpg", ".jpeg")
 def redact_image(input_path: Path, output_path: Path, offline: bool) -> Path:
+    ensure_output_does_not_exist(output_path)
     image = Image.open(input_path)
     image.load()
     if image.mode in ("RGBA", "LA", "PA") or (image.mode == "P" and "transparency" in image.info):

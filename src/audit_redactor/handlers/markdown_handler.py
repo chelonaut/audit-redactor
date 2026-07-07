@@ -17,6 +17,7 @@ from pathlib import Path
 import markdown
 
 from audit_redactor.appliers.html_render import render_and_finish_pdf
+from audit_redactor.appliers.output_guard import ensure_output_does_not_exist
 from audit_redactor.appliers.text import redact_text
 from audit_redactor.detectors import detect_text_with_claude
 from audit_redactor.pipeline import register
@@ -39,6 +40,9 @@ code, pre {{ background: #f0f0f0; padding: 0.2em 0.4em; }}
 
 @register(".md", ".markdown")
 def redact_markdown(input_path: Path, output_path: Path, offline: bool) -> Path:
+    pdf_output_path = output_path.with_suffix(".pdf")
+    ensure_output_does_not_exist(pdf_output_path)
+
     text = input_path.read_text(encoding="utf-8")
     spans = detect_text_with_claude(text, offline)
     redacted_markdown = redact_text(text, spans)
@@ -46,6 +50,5 @@ def redact_markdown(input_path: Path, output_path: Path, offline: bool) -> Path:
     body_html = markdown.markdown(redacted_markdown)
     full_html = _HTML_TEMPLATE.format(body=body_html)
 
-    pdf_output_path = output_path.with_suffix(".pdf")
     render_and_finish_pdf(full_html, spans, pdf_output_path)
     return pdf_output_path

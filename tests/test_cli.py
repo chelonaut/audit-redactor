@@ -71,3 +71,35 @@ class TestExitCodes:
         result = CliRunner().invoke(main, ["redact", str(input_dir), str(dest), "--offline"])
 
         assert result.exit_code == EXIT_SUCCESS
+
+    def test_single_file_declines_to_overwrite_existing_output(self, tmp_path) -> None:
+        src = tmp_path / "in.json"
+        src.write_text('{"note": "nothing sensitive"}', encoding="utf-8")
+        dest = tmp_path / "out.json"
+        dest.write_text('{"prior": "output"}', encoding="utf-8")
+
+        result = CliRunner().invoke(main, ["redact", str(src), str(dest), "--offline"])
+
+        assert result.exit_code == EXIT_FATAL
+        assert dest.read_text(encoding="utf-8") == '{"prior": "output"}'
+
+    def test_batch_continues_past_a_preexisting_output_file(self, tmp_path) -> None:
+        # One file's output already exists (e.g. a re-run, or a misconfigured
+        # output dir) -- that one file must fail and be reported, but the
+        # rest of the batch must still be attempted, per the "never stop on
+        # one file's error" design.
+        input_dir = tmp_path / "in"
+        input_dir.mkdir()
+        (input_dir / "a.json").write_text('{"note": "fine"}', encoding="utf-8")
+        (input_dir / "b.json").write_text('{"note": "also fine"}', encoding="utf-8")
+        dest = tmp_path / "out"
+        dest.mkdir()
+        (dest / "b.json").write_text('{"prior": "output"}', encoding="utf-8")
+
+        result = CliRunner().invoke(main, ["redact", str(input_dir), str(dest), "--offline"])
+
+        assert result.exit_code == EXIT_PARTIAL
+        assert (dest / "a.json").exists()
+        assert (dest / "b.json").read_text(encoding="utf-8") == '{"prior": "output"}'
+        assert "b.json" in result.output
+        assert "already exists" in result.output

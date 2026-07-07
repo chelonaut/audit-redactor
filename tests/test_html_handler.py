@@ -1,4 +1,5 @@
 import fitz
+import pytest
 
 from audit_redactor.handlers.html_handler import redact_html_source
 from audit_redactor.pipeline import redact_file
@@ -168,3 +169,19 @@ class TestHtmlHandler:
         actual = redact_file(src, dest, True)
 
         assert "Hello world" in _extract_text(actual)
+
+    def test_declines_to_overwrite_existing_output(self, tmp_path) -> None:
+        src = tmp_path / "doc.html"
+        src.write_text("<html><body>Contact jane.doe@example.com</body></html>", encoding="utf-8")
+        # The handler always renders to a .pdf regardless of the requested
+        # extension -- the guard must check that *actual* final path, not
+        # the literal "out.html" passed in.
+        dest = tmp_path / "out.html"
+        actual_output = tmp_path / "out.pdf"
+        actual_output.write_bytes(b"%PDF-1.4 unrelated prior output")
+        prior_bytes = actual_output.read_bytes()
+
+        with pytest.raises(FileExistsError):
+            redact_file(src, dest, True)
+
+        assert actual_output.read_bytes() == prior_bytes
