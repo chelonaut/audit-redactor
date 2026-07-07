@@ -38,3 +38,13 @@ audit_redactor = ["data/*.txt"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+filterwarnings = [
+    # PyMuPDF's SWIG-generated bindings create a few internal plumbing types
+    # (SwigPyObject, SwigPyPacked, swigvarlink) without a __module__
+    # attribute; CPython's import system warns about it on every `import
+    # fitz`. Purely cosmetic -- unrelated to PDF-handling correctness, and
+    # not something fixable from our side (upstream SWIG codegen issue,
+    # already on the latest PyMuPDF release). Narrowly scoped to this exact
+    # message so unrelated deprecation warnings still surface normally.
+    "ignore:builtin type Swig.*has no __module__ attribute:DeprecationWarning",
+]
