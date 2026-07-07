@@ -4,7 +4,6 @@ FROM mcr.microsoft.com/playwright/python:v1.61.0-noble
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     tesseract-ocr \
-    libimage-exiftool-perl \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app

@@ -47,6 +47,17 @@ marketplace repo.
 | Person names | Local NER (ab-ai/pii_model) + Claude augmentation | Obscure all but first 4 characters |
 | Client company names | Curated list (web-search-confirmed) + Claude augmentation | Full redaction |
 
+**Images are an exception to the partial-mask methods above (AWS/phone/person name):** phase 5
+found, empirically, that Tesseract's word-level bbox is an *estimate* that can be off by more than a
+character's width on low-contrast source images (e.g. a simulated low-contrast AWS-console-style
+account ID) — attempting to proportionally slice a word's bbox by character index to implement
+"keep last 4 digits" left a partially-redacted, still-legible digit fragment even after a generous
+safety pad. Given this project's standing priority that missed PII is far costlier than
+over-redaction, the image handler always redacts the *entire* OCR word(s) a match overlaps,
+sacrificing the partial-reveal convenience specifically for screenshots/images. PDF, Markdown, and
+JSON are unaffected — they have exact character positions (real glyph objects or literal string
+offsets), not an OCR estimate, so the partial-mask methods above still apply there.
+
 ### 2.4 True redaction requirements (non-negotiable, from original constraints)
 
 - **PDF:** use PyMuPDF `apply_redactions()` to delete underlying content, never an overlay rectangle.
@@ -63,10 +74,20 @@ marketplace repo.
 ### 2.5 Metadata & filename scrubbing (in scope, applies to every output regardless of file type)
 
 - **PDF:** strip Info dictionary, XMP metadata, embedded attachments, JavaScript, form fields, and
-  hidden OCG layers, in addition to the revision-flattening above.
-- **Images:** strip EXIF/IPTC/XMP/PNG text chunks, explicitly including any embedded EXIF thumbnail.
-- **All formats:** run `exiftool -all=` as a final belt-and-suspenders pass on top of
-  PyMuPDF/Pillow's own stripping, since it catches metadata blocks those libraries sometimes miss.
+  hidden OCG layers, in addition to the revision-flattening above. PyMuPDF's own API is the sole
+  mechanism (see 2.4) — no external tool needed.
+- **Images:** strip EXIF/IPTC/XMP/PNG text chunks, explicitly including any embedded EXIF thumbnail,
+  by reconstructing the output image from a raw pixel buffer (`Image.frombytes(mode, size, ...)`)
+  rather than resaving the loaded `Image` object. Verified empirically (phase 5) against a
+  deliberately "polluted" JPEG/PNG carrying EXIF+GPS+embedded-thumbnail, IPTC, XMP, and an ICC
+  profile: Pillow's encoders are opt-in, not copy-forward — they only emit a metadata
+  segment/chunk if it's explicitly passed to `save()`. A pixel-only-sourced `Image` object has an
+  empty `.info` dict, so there is nothing to carry forward and nothing for the encoder to
+  (re-)embed. No external tool is required or used — a prior version of this plan called for a final
+  `exiftool -all=` pass as a "belt-and-suspenders" safety net, but that was speculative and turned
+  out to be unnecessary once tested: unlike PDF, an image file's on-disk bytes are wholly determined
+  by what's passed to Pillow's encoder, so there's no comparable "hidden/miscellaneous location" for
+  metadata to survive in.
 - **Filenames:** run the same detector set (regex + curated list) against the filename string itself
   and produce a safe output name — a file's name is as much a leak vector as its contents (e.g. an
   AWS account number embedded directly in a filename).
