@@ -67,6 +67,17 @@ offsets), not an OCR estimate, so the partial-mask methods above still apply the
   Known caveat to test for: `apply_redactions()` may not fully clear shared XObject/Form streams —
   add a post-save verification pass (re-extract text/search for the redacted string) and fail loudly
   if any target string is still recoverable.
+  - **Confirmed via phase 11's real end-to-end validation run, both now fixed:** (1) `apply_redactions()`
+    only touches the page's visible content stream — a hyperlink's URI is a separate PDF object and can
+    carry sensitive data (an AWS account ID embedded in a console URL) that never appears as blacked-out
+    page text at all; any link whose URI contains a non-URL entity type is now deleted outright. (2) A
+    page whose content is entirely a raster image with no real text layer (a "scanned"/screenshotted
+    PDF) gives `apply_redactions()` nothing to act on — text extraction finds nothing, so detection finds
+    zero spans, and the verification pass reports a false pass since it has no span text to check the
+    raw bytes against. Such pages are now detected (negligible extractable text + at least one embedded
+    image) and redacted via the same OCR pipeline the standalone image handler uses, then the page is
+    replaced entirely with the redacted raster (overlaying a box on the existing image would leave the
+    original unredacted bytes recoverable underneath).
 - **Images (PNG/JPEG):** draw solid rectangles directly on the pixel buffer (Pillow `ImageDraw`),
   then re-encode as a brand-new file. No image ever has "layers" to begin with, but re-encoding
   fresh guarantees no auxiliary chunk (e.g. an EXIF thumbnail generated pre-redaction) survives.
@@ -240,9 +251,16 @@ deferred — see 2.8's "Local NER" note.)
    candidate follow-up for the "redact 1000 documents overnight" scenario, not implemented yet.)
 10. **CLI & Docker packaging** — single entrypoint, works identically on Mac and in CI, exit codes
     for warn-vs-fail (e.g. PDF verification pass failure).
-11. **Test suite & validation pass** — synthetic fixture documents per format covering every
-    redaction target; end-to-end run against the real `~/Downloads/Example` sample folder (or
-    similar) to sanity-check before any production use.
+11. **Test suite & validation pass** — unit coverage per format is solid (106 tests, synthetic
+    content built inline rather than static fixture files). The real end-to-end run against
+    `~/Downloads/Example` has happened once and found two genuine, now-fixed bugs neither the unit
+    suite nor pytest's own import order caught: a circular import that crashed the actual CLI
+    entrypoint outright, and the two PDF gaps documented in 2.4 (sensitive link URIs, image-only
+    "scanned" pages). Still open from that same run, not yet fixed: OCR can fail to read
+    small/tightly-kerned UI text even when contrast is otherwise fine (confirmed, not just
+    theorized — see 2.3's image-handler note), and filename redaction can over-match a date/time
+    as a phone number (benign given the recall-over-precision bias, just worth knowing). Re-run
+    this validation pass again after any detector or PDF/image-handling change, not just once.
 12. **Documentation** — usage, flags, what's redacted vs. not, and the two open questions below
     resolved and recorded.
 

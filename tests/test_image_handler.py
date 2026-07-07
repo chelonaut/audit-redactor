@@ -2,8 +2,8 @@ import pytesseract
 import pytest
 from PIL import Image, ImageDraw, ImageFont, PngImagePlugin
 
+from audit_redactor.appliers.image_ocr import ImageRedactionVerificationError, verify_redacted
 from audit_redactor.detectors.base import Span
-from audit_redactor.handlers.image_handler import ImageRedactionVerificationError, _verify_redacted
 from audit_redactor.pipeline import redact_file
 
 # Pillow's own bundled scalable default font -- portable across platforms
@@ -155,7 +155,7 @@ class TestVerifyRedacted:
             end=23,
         )
         with pytest.raises(ImageRedactionVerificationError):
-            _verify_redacted(img, [span])
+            verify_redacted(img, [span])
 
     def test_passes_when_span_text_absent(self) -> None:
         img = Image.new("RGB", (350, 60), "white")
@@ -170,4 +170,4 @@ class TestVerifyRedacted:
             start=0,
             end=16,
         )
-        _verify_redacted(img, [span])  # should not raise
+        verify_redacted(img, [span])  # should not raise
