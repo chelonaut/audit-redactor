@@ -12,7 +12,14 @@ from __future__ import annotations
 
 from audit_redactor.detectors.base import EntityType, Span
 
-_PLACEHOLDER = "[REDACTED]"
+# `(...)`/`x` rather than `[...]`/`*` -- picked so the output is never
+# ambiguous with Markdown syntax (`[...]` can start a link, `*` is emphasis)
+# once the Markdown handler (phase 6) converts already-redacted Markdown to
+# HTML. Applies uniformly across every format for consistency, not just
+# Markdown -- there's no benefit to a different convention per format, and
+# one fewer thing to keep in sync.
+PLACEHOLDER = "(REDACTED)"
+_MASK_CHAR = "x"
 
 # Entity types masked with a flat placeholder -- PLAN.md 2.3 calls these out
 # as "full redaction" rather than a partial/format-preserving mask.
@@ -79,13 +86,13 @@ def redact_char_ranges(span: Span) -> list[tuple[int, int]]:
 def apply_span_text(span: Span) -> str:
     """Return the masked replacement text for a single span, per PLAN.md 2.3."""
     if span.entity_type in _FULL_REDACTION_TYPES:
-        return _PLACEHOLDER
+        return PLACEHOLDER
     ranges = redact_char_ranges(span)
     hidden = [False] * len(span.text)
     for start, end in ranges:
         for i in range(start, end):
             hidden[i] = True
-    return "".join("*" if is_hidden else ch for ch, is_hidden in zip(span.text, hidden))
+    return "".join(_MASK_CHAR if is_hidden else ch for ch, is_hidden in zip(span.text, hidden))
 
 
 def merge_spans(spans: list[Span]) -> list[Span]:

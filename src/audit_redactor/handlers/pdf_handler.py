@@ -22,20 +22,13 @@ from pathlib import Path
 
 import fitz
 
+from audit_redactor.appliers.pdf import strip_pdf_metadata, verify_pdf_redacted
 from audit_redactor.appliers.text import redact_char_ranges
 from audit_redactor.detectors import detect_text
 from audit_redactor.detectors.base import Span
 from audit_redactor.pipeline import register
 
 _REDACT_FILL = (0, 0, 0)
-
-# Regex/key names the PDF verification pass and metadata scrub key off of.
-# Kept narrow and specific to the catalog keys PLAN.md 2.5 calls out.
-_CATALOG_KEYS_TO_STRIP = ("Names", "OpenAction", "OCProperties")
-
-
-class PdfRedactionVerificationError(RuntimeError):
-    """Raised when a matched span is still recoverable after redaction."""
 
 
 def _page_text_and_char_map(page: "fitz.Page") -> tuple[str, list[fitz.Rect]]:
@@ -76,47 +69,6 @@ def _redact_rects_for_span(span: Span, char_bboxes: list[fitz.Rect]) -> list[fit
     return rects
 
 
-def _strip_metadata(doc: "fitz.Document") -> None:
-    doc.set_metadata({})
-    doc.del_xml_metadata()
-    while doc.embfile_count() > 0:
-        doc.embfile_del(0)
-    for page in doc:
-        for widget in list(page.widgets() or []):
-            page.delete_widget(widget)
-    cat = doc.pdf_catalog()
-    for key in _CATALOG_KEYS_TO_STRIP:
-        doc.xref_set_key(cat, key, "null")
-
-
-def _verify_redacted(doc_path: Path, spans_by_page: list[list[Span]]) -> None:
-    """Fail loudly if any matched span text is still recoverable, either via
-    normal text extraction or as raw bytes anywhere in the saved file (the
-    latter guards against the shared XObject/Form-stream leakage caveat in
-    PLAN.md 2.4, which `apply_redactions()` is not guaranteed to fully clear).
-    """
-    raw_bytes = doc_path.read_bytes()
-    verify_doc = fitz.open(doc_path)
-    try:
-        for page_index, spans in enumerate(spans_by_page):
-            page_text = verify_doc[page_index].get_text()
-            for span in spans:
-                if span.text in page_text:
-                    raise PdfRedactionVerificationError(
-                        f"redaction verification failed: {span.entity_type} span "
-                        f"{span.text!r} still recoverable via text extraction on "
-                        f"page {page_index}"
-                    )
-                if span.text.encode("utf-8") in raw_bytes:
-                    raise PdfRedactionVerificationError(
-                        f"redaction verification failed: {span.entity_type} span "
-                        f"{span.text!r} still present in raw saved file bytes "
-                        f"(page {page_index})"
-                    )
-    finally:
-        verify_doc.close()
-
-
 @register(".pdf")
 def redact_pdf(input_path: Path, output_path: Path, offline: bool) -> Path:
     doc = fitz.open(input_path)
@@ -137,12 +89,19 @@ def redact_pdf(input_path: Path, output_path: Path, offline: bool) -> Path:
             if spans:
                 page.apply_redactions()
 
-        _strip_metadata(doc)
+        strip_pdf_metadata(doc)
 
         output_path.parent.mkdir(parents=True, exist_ok=True)
         doc.save(output_path, garbage=4, deflate=True, clean=True)
     finally:
         doc.close()
 
-    _verify_redacted(output_path, spans_by_page)
+    all_spans = [span for page_spans in spans_by_page for span in page_spans]
+    try:
+        verify_pdf_redacted(output_path, all_spans)
+    except Exception:
+        # Don't leave a file flagged as possibly-unsafe sitting at the
+        # redacted-output path.
+        output_path.unlink(missing_ok=True)
+        raise
     return output_path

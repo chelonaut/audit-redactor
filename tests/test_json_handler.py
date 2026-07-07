@@ -39,7 +39,7 @@ class TestJsonHandler:
         redact_file(src, dest, True)
 
         redacted = json.loads(dest.read_text(encoding="utf-8"))
-        assert redacted["accountId"] == "[REDACTED]"
+        assert redacted["accountId"] == "(REDACTED)"
 
     def test_numeric_leaves_left_untouched(self, tmp_path) -> None:
         src = tmp_path / "record.json"

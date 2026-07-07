@@ -14,7 +14,7 @@ import re
 from pathlib import Path
 from typing import Any
 
-from audit_redactor.appliers.text import redact_text
+from audit_redactor.appliers.text import PLACEHOLDER, redact_text
 from audit_redactor.detectors import detect_text
 from audit_redactor.pipeline import register
 
@@ -39,7 +39,7 @@ def _redact_value(key: str | None, value: Any) -> Any:
         return [_redact_value(key, item) for item in value]
     if isinstance(value, str):
         if key is not None and _is_sensitive_key(key):
-            return "[REDACTED]"
+            return PLACEHOLDER
         return redact_text(value, detect_text(value))
     return value
 

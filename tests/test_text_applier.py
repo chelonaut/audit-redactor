@@ -17,23 +17,23 @@ class TestApplySpanText:
     def test_aws_account_id_keeps_last_4_digits(self) -> None:
         text = "id 123456789012 end"
         span = _span(EntityType.AWS_ACCOUNT_ID, "123456789012", 3)
-        assert redact_text(text, [span]) == "id ********9012 end"
+        assert redact_text(text, [span]) == "id xxxxxxxx9012 end"
 
     def test_aws_account_id_hyphenated_keeps_separators(self) -> None:
         text = "id 1234-5678-9012 end"
         span = _span(EntityType.AWS_ACCOUNT_ID, "1234-5678-9012", 3)
-        assert redact_text(text, [span]) == "id ****-****-9012 end"
+        assert redact_text(text, [span]) == "id xxxx-xxxx-9012 end"
 
     def test_phone_number_masks_all_digits(self) -> None:
         text = "call 555-123-4567 now"
         span = _span(EntityType.PHONE_NUMBER, "555-123-4567", 5)
-        assert redact_text(text, [span]) == "call ***-***-**** now"
+        assert redact_text(text, [span]) == "call xxx-xxx-xxxx now"
 
     def test_person_name_keeps_first_4_characters(self) -> None:
         text = "met Jonathan Smith today"
         span = _span(EntityType.PERSON_NAME, "Jonathan Smith", 4)
         result = redact_text(text, [span])
-        assert result == "met Jona" + "*" * (len("Jonathan Smith") - 4) + " today"
+        assert result == "met Jona" + "x" * (len("Jonathan Smith") - 4) + " today"
 
     def test_short_person_name_left_as_is(self) -> None:
         text = "met Al today"
@@ -48,7 +48,7 @@ class TestApplySpanText:
             _span(EntityType.USERNAME_MENTION, "@bob", 14),
             _span(EntityType.URL, "https://x.com", 19),
         ]
-        assert redact_text(text, spans) == "[REDACTED] [REDACTED] [REDACTED] [REDACTED]"
+        assert redact_text(text, spans) == "(REDACTED) (REDACTED) (REDACTED) (REDACTED)"
 
 
 class TestMergeSpans:

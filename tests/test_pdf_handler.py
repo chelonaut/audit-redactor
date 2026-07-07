@@ -3,8 +3,8 @@ from pathlib import Path
 import fitz
 import pytest
 
+from audit_redactor.appliers.pdf import PdfRedactionVerificationError, verify_pdf_redacted
 from audit_redactor.detectors.base import Span
-from audit_redactor.handlers.pdf_handler import PdfRedactionVerificationError, _verify_redacted
 from audit_redactor.pipeline import redact_file
 
 
@@ -143,7 +143,7 @@ class TestVerifyRedacted:
             end=23,
         )
         with pytest.raises(PdfRedactionVerificationError):
-            _verify_redacted(path, [[span]])
+            verify_pdf_redacted(path, [span])
 
     def test_passes_when_span_text_absent(self, tmp_path) -> None:
         path = tmp_path / "good.pdf"
@@ -161,4 +161,4 @@ class TestVerifyRedacted:
             start=0,
             end=16,
         )
-        _verify_redacted(path, [[span]])  # should not raise
+        verify_pdf_redacted(path, [span])  # should not raise
