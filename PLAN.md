@@ -249,11 +249,14 @@ deferred — see 2.8's "Local NER" note.)
 9. **Claude API integration** — structured-output span-list contract, grounding/verbatim validation,
    `--offline` flag wiring. (Message Batches API path for bulk runs not yet built — still a
    candidate follow-up for the "redact 1000 documents overnight" scenario, not implemented yet.)
-10. **CLI & Docker packaging** — single entrypoint, works identically on Mac and in CI, exit codes
-    for warn-vs-fail (e.g. PDF verification pass failure).
-11. **Test suite & validation pass** — unit coverage per format is solid (106 tests, synthetic
+10. **CLI & Docker packaging** — single entrypoint (works identically on Mac and via Docker; no
+    CI pipeline file exists yet, but nothing about the tool is CI-specific). Exit codes implemented:
+    `0` success, `1` fatal (bad input, or every file in a batch failed), `2` partial (batch mode
+    only — at least one file succeeded and at least one failed, e.g. a PDF verification-pass
+    failure on just that one file).
+11. **Test suite & validation pass** — unit coverage per format is solid (113 tests, synthetic
     content built inline rather than static fixture files). The real end-to-end run against
-    `~/Downloads/Example` has happened once and found two genuine, now-fixed bugs neither the unit
+    `~/Downloads/Example` has happened once and found three genuine, now-fixed bugs neither the unit
     suite nor pytest's own import order caught: a circular import that crashed the actual CLI
     entrypoint outright, and the two PDF gaps documented in 2.4 (sensitive link URIs, image-only
     "scanned" pages). Still open from that same run, not yet fixed: OCR can fail to read
@@ -261,8 +264,9 @@ deferred — see 2.8's "Local NER" note.)
     theorized — see 2.3's image-handler note), and filename redaction can over-match a date/time
     as a phone number (benign given the recall-over-precision bias, just worth knowing). Re-run
     this validation pass again after any detector or PDF/image-handling change, not just once.
-12. **Documentation** — usage, flags, what's redacted vs. not, and the two open questions below
-    resolved and recorded.
+12. **Documentation** — README now covers usage, flags, exit codes, what's redacted per format
+    (and what isn't — JSON's no-Claude-augmentation gap, OCR limitations, no local NER), and Claude
+    API key setup. Both open questions below are resolved.
 
 ---
 

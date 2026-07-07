@@ -10,6 +10,13 @@ from audit_redactor.batch import resolve_inputs, run_batch
 from audit_redactor.detectors.claude_augment import claude_api_key_available
 from audit_redactor.pipeline import redact_file
 
+# PLAN.md build phase 10: distinct exit codes for "couldn't run at all" vs.
+# "ran, but something needs a look" vs. clean success -- lets a CI pipeline
+# or script tell the difference without parsing stdout.
+EXIT_SUCCESS = 0
+EXIT_FATAL = 1  # bad input, unsupported format, or every file in a batch failed
+EXIT_PARTIAL = 2  # batch mode: at least one file succeeded, at least one failed
+
 
 @click.group()
 @click.version_option(version=__version__)
@@ -36,16 +43,20 @@ def redact(input_spec: str, output_path: Path, offline: bool) -> None:
 
     Batch runs never stop on a single file's error -- every matched file is
     attempted, and a summary of successes/failures is printed at the end.
+
+    Exit codes: 0 success, 1 fatal (bad input, or every file failed), 2
+    partial (batch mode only -- at least one file succeeded and at least one
+    failed, e.g. a PDF verification-pass failure on just that one file).
     """
     try:
         resolved = resolve_inputs(input_spec)
     except FileNotFoundError as exc:
         click.echo(f"error: {exc}", err=True)
-        sys.exit(1)
+        sys.exit(EXIT_FATAL)
 
     if not resolved.files:
         click.echo(f"error: no files matched '{input_spec}'", err=True)
-        sys.exit(1)
+        sys.exit(EXIT_FATAL)
 
     # Same condition claude_augment.run_claude_augmentation gates on -- surfaced
     # here too so the user sees it once, up front, regardless of single-file or
@@ -68,7 +79,7 @@ def redact(input_spec: str, output_path: Path, offline: bool) -> None:
             actual = redact_file(resolved.files[0], output_path, offline)
         except Exception as exc:  # noqa: BLE001 - surfaced to the user as a CLI error
             click.echo(f"error: {exc}", err=True)
-            sys.exit(1)
+            sys.exit(EXIT_FATAL)
         click.echo(f"redacted: {resolved.files[0]} -> {actual}")
         return
 
@@ -79,7 +90,7 @@ def redact(input_spec: str, output_path: Path, offline: bool) -> None:
         click.echo(f"{len(result.failed)}/{result.total} files failed:")
         for path, reason in result.failed:
             click.echo(f"  {path}: {reason}")
-        sys.exit(1)
+        sys.exit(EXIT_PARTIAL if result.succeeded else EXIT_FATAL)
 
 
 if __name__ == "__main__":

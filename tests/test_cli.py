@@ -1,0 +1,73 @@
+from click.testing import CliRunner
+
+from audit_redactor.cli import EXIT_FATAL, EXIT_PARTIAL, EXIT_SUCCESS, main
+
+
+class TestExitCodes:
+    """PLAN.md build phase 10: 0 success, 1 fatal, 2 partial (batch-only)."""
+
+    def test_single_file_success_exits_zero(self, tmp_path) -> None:
+        src = tmp_path / "in.json"
+        src.write_text('{"note": "nothing sensitive"}', encoding="utf-8")
+        dest = tmp_path / "out.json"
+
+        result = CliRunner().invoke(main, ["redact", str(src), str(dest), "--offline"])
+
+        assert result.exit_code == EXIT_SUCCESS
+
+    def test_missing_input_exits_fatal(self, tmp_path) -> None:
+        result = CliRunner().invoke(
+            main, ["redact", str(tmp_path / "missing.json"), str(tmp_path / "out.json"), "--offline"]
+        )
+
+        assert result.exit_code == EXIT_FATAL
+
+    def test_no_glob_matches_exits_fatal(self, tmp_path) -> None:
+        result = CliRunner().invoke(
+            main, ["redact", str(tmp_path / "*.nomatch"), str(tmp_path / "out"), "--offline"]
+        )
+
+        assert result.exit_code == EXIT_FATAL
+
+    def test_single_file_hard_failure_exits_fatal(self, tmp_path) -> None:
+        # Malformed JSON -- json.loads raises, and there's only one file, so
+        # nothing at all succeeded.
+        src = tmp_path / "bad.json"
+        src.write_text("{not valid json", encoding="utf-8")
+        dest = tmp_path / "out.json"
+
+        result = CliRunner().invoke(main, ["redact", str(src), str(dest), "--offline"])
+
+        assert result.exit_code == EXIT_FATAL
+
+    def test_batch_partial_failure_exits_partial(self, tmp_path) -> None:
+        input_dir = tmp_path / "in"
+        input_dir.mkdir()
+        (input_dir / "good.json").write_text('{"note": "fine"}', encoding="utf-8")
+        (input_dir / "bad.json").write_text("{not valid json", encoding="utf-8")
+        dest = tmp_path / "out"
+
+        result = CliRunner().invoke(main, ["redact", str(input_dir), str(dest), "--offline"])
+
+        assert result.exit_code == EXIT_PARTIAL
+
+    def test_batch_total_failure_exits_fatal(self, tmp_path) -> None:
+        input_dir = tmp_path / "in"
+        input_dir.mkdir()
+        (input_dir / "bad.json").write_text("{not valid json", encoding="utf-8")
+        dest = tmp_path / "out"
+
+        result = CliRunner().invoke(main, ["redact", str(input_dir), str(dest), "--offline"])
+
+        assert result.exit_code == EXIT_FATAL
+
+    def test_batch_full_success_exits_zero(self, tmp_path) -> None:
+        input_dir = tmp_path / "in"
+        input_dir.mkdir()
+        (input_dir / "a.json").write_text('{"note": "fine"}', encoding="utf-8")
+        (input_dir / "b.json").write_text('{"note": "also fine"}', encoding="utf-8")
+        dest = tmp_path / "out"
+
+        result = CliRunner().invoke(main, ["redact", str(input_dir), str(dest), "--offline"])
+
+        assert result.exit_code == EXIT_SUCCESS
