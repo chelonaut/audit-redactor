@@ -7,6 +7,7 @@ import click
 
 from audit_redactor import __version__
 from audit_redactor.batch import resolve_inputs, run_batch
+from audit_redactor.detectors.claude_augment import claude_api_key_available
 from audit_redactor.pipeline import redact_file
 
 
@@ -45,6 +46,20 @@ def redact(input_spec: str, output_path: Path, offline: bool) -> None:
     if not resolved.files:
         click.echo(f"error: no files matched '{input_spec}'", err=True)
         sys.exit(1)
+
+    # Same condition claude_augment.run_claude_augmentation gates on -- surfaced
+    # here too so the user sees it once, up front, regardless of single-file or
+    # batch mode, rather than discovering it only after redaction is done.
+    if offline or not claude_api_key_available():
+        click.secho(
+            "⚠️  WARNING: running with local-only detection (no Claude "
+            "augmentation pass) -- either --offline was set or no Claude API key "
+            "is available. Redaction is more likely to be incomplete in this mode. "
+            "Always review redacted output before sharing it; this applies doubly here.",
+            err=True,
+            fg="yellow",
+            bold=True,
+        )
 
     # Single-file mode: OUTPUT_PATH is the exact destination, unless it's
     # already an existing directory (then behave like batch mode into it).

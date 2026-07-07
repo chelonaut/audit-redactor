@@ -12,12 +12,19 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 
+# Install dependencies (and the Chromium download) against a skeleton
+# package first. This is by far the slowest part of the build (torch,
+# transformers, Playwright's browser download) and should only re-run when
+# pyproject.toml/README.md actually change -- not on every source or test
+# edit. `-e` (editable) install links the installed package back to ./src
+# rather than copying it, so the real source can be COPY'd in afterward as a
+# separate, cheap layer without invalidating this one.
 COPY pyproject.toml README.md ./
-COPY src ./src
-
-RUN pip install --no-cache-dir '.[dev]' \
+RUN mkdir -p src/audit_redactor && touch src/audit_redactor/__init__.py \
+    && pip install --no-cache-dir -e '.[dev]' \
     && playwright install --with-deps chromium
 
+COPY src ./src
 COPY tests ./tests
 
 ENTRYPOINT ["audit-redactor"]

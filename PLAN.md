@@ -121,44 +121,44 @@ offsets), not an OCR estimate, so the partial-mask methods above still apply the
 5. The intermediate redacted HTML/Markdown exists only in memory/temp and is never written to
    persistent output.
 
-### 2.8 Detection architecture — hybrid local + Claude
+### 2.8 Detection architecture — local + Claude
 
-**Principle:** detection and application are fully decoupled. Every detector (regex, local NER
-model, Claude) produces the same output shape — `(matched text, entity type, confidence, source)` —
-which feeds the one deterministic applier per file type. Adding Claude never touches the PDF/image/
-JSON/HTML redaction logic; it's just one more producer of the same span list.
+**Principle:** detection and application are fully decoupled. Every detector (regex, Claude, and
+any local NER model added later) produces the same output shape — `(matched text, entity type,
+confidence, source)` — which feeds the one deterministic applier per file type. Adding a new
+detector never touches the PDF/image/JSON/HTML redaction logic; it's just one more producer of the
+same span list.
 
 **Order of operations (local-first, for safety and graceful degradation):**
 
 1. Regex core catches AWS numbers, phones, emails, URLs, and curated company names — applied
    immediately regardless of anything downstream.
-2. **ab-ai/pii_model** (fine-tuned `bert-base-cased`, 33 PII entity types, Apache 2.0) runs as a
-   local NER pass for person/company names, using its per-token confidence score as a threshold:
-   - High-confidence hits (tune threshold empirically — do not trust the model's own 95-97%
-     self-reported number, which is in-distribution on its own synthetic training data split, not
-     independently verified) are redacted immediately, no Claude round-trip needed.
-   - Low/medium-confidence hits become **hints**, not decisions.
-3. **At this point, if no Claude API key is present or `--offline` is set, processing stops here.**
-   The document is already materially redacted — Claude is strictly additive, never a dependency for
-   baseline safety.
-4. If a Claude API key is available: send the full (already partially-redacted) document text, with
-   the local model's low-confidence hints marked inline, and ask Claude to return **only a compact
-   JSON list of corrections and additions** — spans it believes were missed, or hinted spans it
-   disagrees with — never a full rewritten document. This keeps output tokens small and roughly
-   constant regardless of document length, while not capping recall at whatever the local model
-   happened to propose (the failure mode of a candidate-only design: a true local miss is invisible
-   to Claude if Claude only ever reviews pre-selected candidates).
-5. **Grounding check:** validate every span Claude returns literally appears verbatim in the source
-   text before redacting it (via structured output / strict JSON schema). Reject anything that
-   doesn't match exactly — guards against hallucinated or paraphrased spans that wouldn't map to a
-   real bounding box / JSON path / DOM node anyway.
-6. Apply the corrected/additional spans through the same deterministic appliers as step 1.
+2. **At this point, if no Claude API key is present or `--offline` is set, processing stops here.**
+   The document is already materially redacted with the regex/company-list pass — Claude is
+   strictly additive, never a dependency for baseline safety.
+3. If a Claude API key is available: send the full (already partially-redacted) document text and
+   ask Claude to return **only a compact JSON list of missed spans** — person/company names it
+   believes the regex/company-list pass missed — never a full rewritten document. This keeps
+   output tokens small and roughly constant regardless of document length.
+4. **Grounding check:** validate every span Claude returns literally appears verbatim in the source
+   text before redacting it (via a strict tool-call schema plus a literal, word-bounded substring
+   search against the original text — Claude never reports character offsets itself, since that's
+   arithmetic LLMs are unreliable at). Reject anything that doesn't match exactly — guards against
+   hallucinated or paraphrased spans that wouldn't map to a real bounding box / JSON path / DOM node
+   anyway.
+5. Apply the additional spans through the same deterministic appliers as step 1.
 
-**Why ab-ai/pii_model despite its lack of independent backing:** its role in this design is
-downgraded from "sole detector" (where its unverified numbers were the whole risk) to "confidence
-pre-filter and hint generator that Claude can override" — its weaknesses matter far less when
-Claude is reviewing the underlying text anyway. It only becomes the sole line of defense in
-`--offline` mode, where the accuracy trade-off is already understood and explicit.
+**Local NER (deferred, possible future extension — not currently planned near-term):** an earlier
+draft of this design included a local NER pass (`ab-ai/pii_model`, fine-tuned `bert-base-cased`)
+between steps 1 and 2, using its per-token confidence as a threshold to decide between immediate
+redaction and Claude-reviewed "hints." Dropped for now: `transformers`/`torch` added ~5.4GB to the
+Docker image (an unpinned `torch` install defaults to the CUDA-enabled Linux wheel, useless for a
+small CPU-inference model) and made the build unreliable over a slow network, for a detector this
+project doesn't currently need — Claude's own recall on the reviewed text covers the same ground
+without a multi-gigabyte dependency or an empirical-threshold-tuning exercise up front. Revisit only
+if a real case shows the deterministic + Claude combination missing names Claude itself can't catch
+(e.g. a genuinely offline-only deployment with no Claude access at all) — and if revisited, pin
+`torch` to the CPU-only wheel index (`--extra-index-url https://download.pytorch.org/whl/cpu`).
 
 ### 2.9 Cost & throughput levers
 - Claude Message Batches API (50% cost discount, async) for bulk/offline runs — e.g. the "redact
@@ -192,17 +192,12 @@ regex core (AWS #s, phones, emails, URLs, curated company names)
    → redact immediately (highest confidence, always applied)
       │
       ▼
-ab-ai/pii_model NER pass (person/company names)
-   → high confidence: redact immediately
-   → low/medium confidence: mark as hint, carry forward
-      │
-      ▼
   ┌─── no API key / --offline ───────────────┐
   │                                            │
   ▼                                            ▼
 apply filename + metadata scrub          Claude augmentation pass
-      │                                   (full text + hints in,
-      │                                    compact span-list JSON out)
+      │                                   (full already-redacted text in,
+      │                                    compact span-list tool call out)
       │                                            │
       │                                    grounding check
       │                                    (reject non-verbatim spans)
@@ -216,13 +211,15 @@ apply filename + metadata scrub          Claude augmentation pass
                          (original file untouched)
 ```
 
+(A local NER pass was drafted between the regex core and the offline/Claude branch above, but is
+deferred — see 2.8's "Local NER" note.)
+
 ---
 
 ## 4. Build phases
 
 1. **Repo & scaffolding** — repo already created (`chelonaut/audit-redactor`); add Dockerfile
-   (Python base + Playwright/Chromium + Tesseract + exiftool + `transformers`); CLI entrypoint
-   skeleton.
+   (Python base + Playwright/Chromium + Tesseract); CLI entrypoint skeleton.
 2. **Regex core** — AWS account numbers, phone numbers, emails/usernames, URLs; curated company-name
    matcher; unit tests with synthetic fixtures for each pattern.
 3. **Text-format handlers (simplest first)** — Markdown (regex substitution; PDF rendering deferred
@@ -236,12 +233,11 @@ apply filename + metadata scrub          Claude augmentation pass
 6. **HTML/Markdown → PDF pipeline** — BeautifulSoup source redaction (HTML) or regex/NER redaction
    then Markdown→HTML conversion (Markdown) → Playwright headless render → PDF metadata scrub.
 7. **Filename redaction module** — applies to every output regardless of type.
-8. **Local ML integration** — load `ab-ai/pii_model` via `transformers`, wire up confidence
-   thresholding, **validate its actual precision/recall against a held-out sample of realistic
-   (synthetic, not real customer) documents** before trusting any threshold value — do not rely on
-   the model card's self-reported numbers.
+8. ~~**Local ML integration**~~ — deferred, possible future extension, not currently planned
+   near-term (see 2.8's "Local NER" note). Skipped in favor of going straight to phase 9.
 9. **Claude API integration** — structured-output span-list contract, grounding/verbatim validation,
-   `--offline` flag wiring, Message Batches API path for bulk runs.
+   `--offline` flag wiring. (Message Batches API path for bulk runs not yet built — still a
+   candidate follow-up for the "redact 1000 documents overnight" scenario, not implemented yet.)
 10. **CLI & Docker packaging** — single entrypoint, works identically on Mac and in CI, exit codes
     for warn-vs-fail (e.g. PDF verification pass failure).
 11. **Test suite & validation pass** — synthetic fixture documents per format covering every
@@ -257,8 +253,8 @@ apply filename + metadata scrub          Claude augmentation pass
 1. ~~Should Markdown also get the HTML-style "render to PDF" treatment?~~ **Resolved: yes.** Markdown
    gets the same redact-source → render-to-PDF treatment as HTML, for audit-tool consistency (see
    §2.2, §2.7).
-2. Confidence threshold value(s) for ab-ai/pii_model — to be set empirically in Phase 8, not
-   guessed up front.
+2. ~~Confidence threshold value(s) for ab-ai/pii_model~~ **Moot for now:** the local NER phase this
+   applied to is deferred (see 2.8) — revisit only if that phase is picked back up.
 
 ## 6. Non-goals
 - This tool does not replace the existing `plugins/chelonaut/skills/redact` Claude Code skill

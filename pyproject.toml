@@ -22,10 +22,17 @@ dependencies = [
     # bump either one after confirming the target version is actually
     # published on PyPI (`pip index versions playwright`) -- see Dockerfile.
     "playwright==1.60.0",
-    "transformers>=4.42",
-    "torch>=2.3",
-    "anthropic>=0.34",
+    # >=0.60 for strict tool use / structured-output support, used by the
+    # Claude augmentation pass (detectors/claude_augment.py, phase 9).
+    "anthropic>=0.60",
 ]
+# transformers/torch (local NER, PLAN.md 2.8/phase 8) deliberately not a
+# dependency here -- that phase is a possible future extension, not planned
+# near-term work (see PLAN.md). Unpinned `torch` alone added ~5.4GB to the
+# Docker image (it defaults to the CUDA-enabled Linux wheel, unneeded for a
+# small CPU-inference model) and made the build flaky over a slow network.
+# If/when that phase is revisited, pin torch to the CPU-only wheel index
+# (`--extra-index-url https://download.pytorch.org/whl/cpu`) to keep it lean.
 
 [project.optional-dependencies]
 dev = [

@@ -5,6 +5,17 @@ values -- never regexes the raw file text -- so the output is guaranteed
 valid JSON by construction. Numeric/bool/null leaves are left untouched by
 default; converting a number to a redacted string would silently change its
 type and could break an auditor's schema validation.
+
+Deliberately does not run the Claude augmentation pass (phase 9): detection
+here happens per string leaf, and PLAN.md 2.8's design sends one whole
+document's text to Claude per call, not one call per leaf -- doing the
+latter would fire a Claude API call per JSON string value, which doesn't
+scale and loses the full-document context the augmentation prompt relies on.
+JSON documents therefore only get the deterministic regex/company-list pass,
+same as every format in `--offline` mode. Worth revisiting with a two-pass
+design (collect all leaves, one Claude call over the concatenated corpus,
+then re-walk to apply grounded spans per leaf) if a real JSON-heavy PII case
+surfaces.
 """
 
 from __future__ import annotations

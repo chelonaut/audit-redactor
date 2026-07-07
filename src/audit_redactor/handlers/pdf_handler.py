@@ -24,7 +24,7 @@ import fitz
 
 from audit_redactor.appliers.pdf import strip_pdf_metadata, verify_pdf_redacted
 from audit_redactor.appliers.text import redact_char_ranges
-from audit_redactor.detectors import detect_text
+from audit_redactor.detectors import detect_text_with_claude
 from audit_redactor.detectors.base import Span
 from audit_redactor.pipeline import register
 
@@ -81,7 +81,7 @@ def redact_pdf(input_path: Path, output_path: Path, offline: bool) -> Path:
         spans_by_page: list[list[Span]] = []
         for page in doc:
             text, char_bboxes = _page_text_and_char_map(page)
-            spans = detect_text(text)
+            spans = detect_text_with_claude(text, offline)
             spans_by_page.append(spans)
             for span in spans:
                 for rect in _redact_rects_for_span(span, char_bboxes):

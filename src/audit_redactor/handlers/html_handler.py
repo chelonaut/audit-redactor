@@ -23,7 +23,7 @@ from bs4 import BeautifulSoup, Comment
 
 from audit_redactor.appliers.html_render import render_and_finish_pdf
 from audit_redactor.appliers.text import redact_text
-from audit_redactor.detectors import detect_text
+from audit_redactor.detectors import detect_text_with_claude
 from audit_redactor.detectors.base import Span
 from audit_redactor.pipeline import register
 
@@ -32,10 +32,14 @@ from audit_redactor.pipeline import register
 _SKIP_TEXT_PARENTS = {"script", "style"}
 
 
-def redact_html_source(html: str) -> tuple[str, list[Span]]:
+def redact_html_source(html: str, offline: bool = True) -> tuple[str, list[Span]]:
     """Redact an HTML document's source, returning the redacted markup and
     every span found across all text nodes (for the post-render verification
     pass).
+
+    `offline` defaults to `True` so callers that don't care about Claude
+    augmentation (unit tests) get local-only detection with no risk of an
+    unexpected network call.
     """
     soup = BeautifulSoup(html, "html.parser")
 
@@ -55,7 +59,7 @@ def redact_html_source(html: str) -> tuple[str, list[Span]]:
         if node.parent and node.parent.name in _SKIP_TEXT_PARENTS:
             continue
         text = str(node)
-        spans = detect_text(text)
+        spans = detect_text_with_claude(text, offline)
         if spans:
             all_spans.extend(spans)
             node.replace_with(redact_text(text, spans))
@@ -66,7 +70,7 @@ def redact_html_source(html: str) -> tuple[str, list[Span]]:
 @register(".html", ".htm")
 def redact_html(input_path: Path, output_path: Path, offline: bool) -> Path:
     html = input_path.read_text(encoding="utf-8")
-    redacted_html, spans = redact_html_source(html)
+    redacted_html, spans = redact_html_source(html, offline)
 
     pdf_output_path = output_path.with_suffix(".pdf")
     render_and_finish_pdf(redacted_html, spans, pdf_output_path)

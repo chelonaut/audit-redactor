@@ -18,7 +18,7 @@ import markdown
 
 from audit_redactor.appliers.html_render import render_and_finish_pdf
 from audit_redactor.appliers.text import redact_text
-from audit_redactor.detectors import detect_text
+from audit_redactor.detectors import detect_text_with_claude
 from audit_redactor.pipeline import register
 
 _HTML_TEMPLATE = """<!DOCTYPE html>
@@ -40,7 +40,7 @@ code, pre {{ background: #f0f0f0; padding: 0.2em 0.4em; }}
 @register(".md", ".markdown")
 def redact_markdown(input_path: Path, output_path: Path, offline: bool) -> Path:
     text = input_path.read_text(encoding="utf-8")
-    spans = detect_text(text)
+    spans = detect_text_with_claude(text, offline)
     redacted_markdown = redact_text(text, spans)
 
     body_html = markdown.markdown(redacted_markdown)

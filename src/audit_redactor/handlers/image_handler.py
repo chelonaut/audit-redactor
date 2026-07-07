@@ -49,7 +49,7 @@ from pathlib import Path
 import pytesseract
 from PIL import Image, ImageDraw, ImageOps
 
-from audit_redactor.detectors import detect_text
+from audit_redactor.detectors import detect_text_with_claude
 from audit_redactor.detectors.base import Span
 from audit_redactor.pipeline import register
 
@@ -212,7 +212,7 @@ def redact_image(input_path: Path, output_path: Path, offline: bool) -> Path:
         working = image.convert("RGB")
 
     text, word_spans = _reconstruct_text_and_word_map(working)
-    spans = detect_text(text)
+    spans = detect_text_with_claude(text, offline)
     redacted = _redact_pixels(working, spans, word_spans)
     fresh = _fresh_copy(redacted)
 
