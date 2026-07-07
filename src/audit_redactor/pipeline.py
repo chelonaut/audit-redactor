@@ -36,3 +36,9 @@ def redact_file(input_path: Path, output_path: Path, offline: bool) -> Path:
         supported = ", ".join(sorted(_HANDLERS)) or "(none registered yet)"
         raise ValueError(f"unsupported file format '{ext}'. Supported: {supported}")
     return handler(input_path, output_path, offline)
+
+
+# Side-effecting import: populates _HANDLERS via each submodule's @register
+# decorator. Kept at the bottom of the module so `register`/`_HANDLERS` are
+# already defined by the time handlers import them back from here.
+from audit_redactor import handlers  # noqa: E402,F401
