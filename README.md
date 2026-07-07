@@ -27,3 +27,15 @@ audit-redactor redact input.pdf output.pdf --offline
 docker build -t audit-redactor .
 docker run --rm -v "$PWD:/data" audit-redactor redact /data/input.pdf /data/output.pdf
 ```
+
+### Keeping the Playwright version pin in sync
+
+`pyproject.toml`'s `playwright==X.Y.Z` dependency and the Dockerfile's
+`FROM mcr.microsoft.com/playwright/python:vX.Y.Z-noble` base image tag **must
+always match exactly** — the Docker image's pre-installed Chromium build is
+tied to that specific Python package version, and a mismatch causes
+Playwright to fail at runtime. Before bumping either one, confirm the target
+version is actually published on PyPI (`pip index versions playwright`) —
+the Docker base image tag has been observed to exist before the matching
+PyPI package was published, which is what caused this to drift out of sync
+once already.
