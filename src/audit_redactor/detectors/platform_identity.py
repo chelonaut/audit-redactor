@@ -16,10 +16,16 @@ Deliberately split into two independent halves so "which URLs count as
 identity evidence" can grow (more platforms, other clue types) without
 touching "how do we redact a known name once we have one" at all:
 
-  1. `find_identity_usernames()` -- extraction rules, one per platform, each
-     just a (hostnames, reserved-path denylist, username shape) tuple. Only
-     GitHub is registered today; GitLab/Bitbucket/etc. are a matter of
-     appending another `IdentityUrlRule`, not restructuring anything.
+  1. `find_identity_usernames()` -- runs two independent kinds of clue
+     extraction and merges their results into one username set:
+       a. URL-based rules, one per platform, each just a (hostnames,
+          reserved-path denylist, username shape) tuple. Only GitHub is
+          registered today; GitLab/Bitbucket/etc. are a matter of appending
+          another `IdentityUrlRule`, not restructuring anything.
+       b. A label-based rule with no URL involved at all: an explicit
+          "User:"/"Username:" label immediately followed by a
+          username-shaped token, e.g. "Username: octocat" in a support
+          ticket or config dump.
   2. `KnownIdentityDetector` -- a fully generic literal-string detector with
      no idea where its usernames came from. Any future source of "this
      string is a personal identifier" evidence (not just a URL) can reuse it
@@ -49,6 +55,16 @@ Known limitations (not silently claimed as covered):
 - Discovery only looks at real text and link/attribute targets; it does not
   OCR image content, so a username visible only inside a screenshot (with
   no accompanying real link elsewhere in the document) won't be found.
+- The "User:"/"Username:" label rule has no way to confirm the token after
+  the label is actually an account name rather than, say, prose ("Username:
+  optional for guest checkout") -- the label match combined with
+  `_MIN_LABELED_USERNAME_LENGTH` is the only guard, same recall-over-
+  precision bias as the URL rules above. The label itself is matched
+  case-insensitively, but once a username is found, later bare occurrences
+  of it are still matched case-sensitively via `KnownIdentityDetector`.
+  A trailing "." is stripped (treated as sentence punctuation, since real
+  usernames here never end on a dot), but no other trailing punctuation
+  (",", ")", etc.) is -- an unhandled case if it comes up in practice.
 """
 
 from __future__ import annotations
@@ -67,6 +83,20 @@ from audit_redactor.detectors.regex_detectors import URL_PATTERNS
 _MIN_USERNAME_LENGTH = 3
 
 _GITHUB_USERNAME_RE = re.compile(r"[A-Za-z0-9](?:-?[A-Za-z0-9])*")
+
+# "User:"/"Username:" labels are typically followed by a full account name
+# rather than a short handle, so this uses a higher floor than
+# `_MIN_USERNAME_LENGTH` above -- a bare "User: Al" shouldn't be enough to
+# make every other "Al" in the document a redaction target.
+_MIN_LABELED_USERNAME_LENGTH = 5
+
+# No URL involved: an explicit "User:"/"Username:" label (case-insensitive,
+# word-bounded so "PowerUser:" doesn't count) followed by optional
+# whitespace and a username-shaped run of letters/digits/dots/hyphens/
+# underscores/@ -- the match ends at the first character outside that set.
+_LABELED_USERNAME_RE = re.compile(
+    r"\b(?:User|Username)\s*:\s*([A-Za-z0-9._@-]+)", re.IGNORECASE
+)
 
 # GitHub's own top-level routes -- "github.com/settings" or
 # "github.com/marketplace" is navigation chrome, not a person. Sourced from
@@ -144,14 +174,14 @@ def _extract_from_url(url: str) -> str | None:
 
 
 def find_identity_usernames(texts: Iterable[str]) -> set[str]:
-    """Scan `texts` for platform profile/repo URLs and SSH remotes, and
-    return the set of usernames they reveal.
+    """Scan `texts` for platform profile/repo URLs, SSH remotes, and
+    "User:"/"Username:" labels, and return the set of usernames they reveal.
 
     Callers pass in *every* piece of text and every link/attribute target in
     the document being redacted (page text, PDF hyperlink URIs, JSON string
     leaves, HTML `href`/`src` attribute values, ...) so a username that only
-    ever shows up bare -- with no accompanying link -- somewhere else in the
-    same document is still caught on the second, redaction pass.
+    ever shows up bare -- with no accompanying link or label -- somewhere
+    else in the same document is still caught on the second, redaction pass.
     """
     found: set[str] = set()
     for text in texts:
@@ -169,6 +199,14 @@ def find_identity_usernames(texts: Iterable[str]) -> set[str]:
                 continue
             username = _validate(m.group(2), rule)
             if username:
+                found.add(username)
+        for m in _LABELED_USERNAME_RE.finditer(text):
+            # A trailing "." is virtually always sentence punctuation, not
+            # part of the username -- real usernames here use "." only as
+            # an internal separator (e.g. "fred.bloggs"), never as the
+            # last character.
+            username = m.group(1).rstrip(".")
+            if len(username) >= _MIN_LABELED_USERNAME_LENGTH:
                 found.add(username)
     return found
 
