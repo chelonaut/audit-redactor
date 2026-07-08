@@ -1,3 +1,5 @@
+import warnings
+
 import pytest
 
 from audit_redactor.detectors.base import EntityType, Span
@@ -17,8 +19,9 @@ class _FakeToolUseBlock:
 
 
 class _FakeResponse:
-    def __init__(self, content: list) -> None:
+    def __init__(self, content: list, stop_reason: str = "tool_use") -> None:
         self.content = content
+        self.stop_reason = stop_reason
 
 
 class _FakeMessages:
@@ -201,3 +204,28 @@ class TestIdentityDetectorClaudeOrdering:
         assert claude_spans == []
         entity_types = {span.entity_type for span in existing}
         assert entity_types == {EntityType.USERNAME_MENTION}
+
+    def test_truncated_response_warns_but_still_returns_partial_spans(self) -> None:
+        # A response cut off at max_tokens mid-generation must not fail
+        # silently -- the caller needs to know recall may be incomplete for
+        # this chunk, even though whatever was reported before the cutoff is
+        # still used.
+        text = "Contact Jane Doe for details."
+        client = _FakeClient(
+            _FakeResponse(
+                [_FakeToolUseBlock({"spans": [{"text": "Jane Doe", "entity_type": "PERSON_NAME"}]})],
+                stop_reason="max_tokens",
+            )
+        )
+        with pytest.warns(RuntimeWarning, match="truncated"):
+            spans = run_claude_augmentation(text, [], offline=False, api_key="sk-ant-test", client=client)
+        assert len(spans) == 1
+        assert spans[0].text == "Jane Doe"
+
+    def test_non_truncated_response_does_not_warn(self) -> None:
+        text = "Contact Jane Doe for details."
+        client = _FakeClient(_tool_response([{"text": "Jane Doe", "entity_type": "PERSON_NAME"}]))
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            spans = run_claude_augmentation(text, [], offline=False, api_key="sk-ant-test", client=client)
+        assert len(spans) == 1

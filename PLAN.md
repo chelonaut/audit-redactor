@@ -210,6 +210,25 @@ same span list.
    ask Claude to return **only a compact JSON list of missed spans** — person/company names it
    believes the regex/company-list pass missed — never a full rewritten document. This keeps
    output tokens small and roughly constant regardless of document length.
+
+   **Scaling to large documents:** the PDF handler already sends one Claude call per page, not one
+   call for the whole document, so page count alone doesn't stress any per-call limit — a 1000-row
+   table spread across many pages means a modest, bounded number of distinct names per page. Sonnet
+   5's 1M-token context window makes *input* size a non-issue even for a single very dense page.
+   The real constraint is the tool call's *output* token budget (`DEFAULT_MAX_TOKENS`,
+   `detectors/claude_augment.py`): the prompt instructs Claude to report each distinct name only
+   once (not every occurrence, since the grounding step already finds every literal occurrence
+   itself), so output size scales with the count of *unique* names on a page, not row count — but a
+   single page dense enough with distinct names can still approach it. Verified against a real,
+   very dense single-page issue-tracker export: output usage measured at 2300–3300 tokens against
+   the original 4096 limit, close enough that a denser page could plausibly exceed it — raised to
+   16000 for headroom (billing reflects tokens actually generated, not this ceiling, so there's no
+   cost downside), and `run_claude_augmentation` now explicitly detects `stop_reason == "max_tokens"`
+   and emits a `RuntimeWarning` rather than letting a truncated response fail silently or partially.
+   Markdown sends its entire file in one call (no per-page chunking exists for a single-file
+   format) and is subject to the same output-budget consideration if a markdown file embeds an
+   unusually large table. HTML calls Claude once per DOM text node — the opposite profile, many
+   small calls rather than one large one, a latency/cost consideration rather than a limit risk.
 4. **Grounding check:** validate every span Claude returns literally appears verbatim in the source
    text before redacting it (via a strict tool-call schema plus a literal, word-bounded substring
    search against the original text — Claude never reports character offsets itself, since that's

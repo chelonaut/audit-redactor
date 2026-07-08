@@ -36,7 +36,14 @@ from audit_redactor.detectors.base import EntityType, Span
 # default here. Callers needing Opus-grade recall despite the cost can pass
 # `model=` explicitly to `run_claude_augmentation`.
 DEFAULT_MODEL = "claude-sonnet-5"
-DEFAULT_MAX_TOKENS = 4096
+# Raised from an initial 4096 after a real document (a dense, table-heavy
+# issue-tracker export) used 2300-3300 output tokens on a single page purely
+# reporting distinct names -- comfortably under 16000, but close enough to
+# the old ceiling that a denser page could plausibly have exceeded it.
+# Billing only reflects tokens actually generated, not this ceiling, so
+# there's no cost downside to leaving headroom, and 16000 stays well short
+# of the point where the SDK would require streaming for a non-streaming call.
+DEFAULT_MAX_TOKENS = 16000
 
 # Restricted to the two entity types PLAN.md 2.8 scopes this pass to --
 # everything else (emails, phones, URLs, AWS IDs, curated company names) is
@@ -179,6 +186,21 @@ def run_claude_augmentation(
     except APIError as exc:
         warnings.warn(f"Claude augmentation pass skipped: {exc}", RuntimeWarning, stacklevel=2)
         return []
+
+    if response.stop_reason == "max_tokens":
+        # The tool-call response was cut off mid-generation before Claude
+        # finished listing every distinct name/company it found for this
+        # chunk. Whatever was reported before the cutoff is still used below
+        # (better than discarding it), but recall for this chunk is not
+        # complete -- that must be surfaced, not fail silently the way an
+        # ordinary incomplete-but-valid response would.
+        warnings.warn(
+            "Claude augmentation response was truncated at the max_tokens "
+            "limit -- person/company name recall may be incomplete for this "
+            "chunk of the document.",
+            RuntimeWarning,
+            stacklevel=2,
+        )
 
     tool_use = next((block for block in response.content if block.type == "tool_use"), None)
     if tool_use is None:
