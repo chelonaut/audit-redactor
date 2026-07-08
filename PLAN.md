@@ -95,6 +95,15 @@ format list, and any phone-regex match overlapping a recognized date/time is dro
 a general-purpose date parser — it only needs to decide "protect this from the phone detector," not
 parse a calendar date correctly in every locale/ambiguous-order case.
 
+**The phone detector also enforces a minimum total digit count (7), independent of the date/time
+exclusion above.** A partial date like `2021-06` (year-month, no day — 2 groups, 6 digits) or a partial
+time like `16.13` (hour.minute, no seconds — 2 groups, 4 digits) both matched the separator-based phone
+shape's own minimum (as few as 2 groups) but aren't 3-component dates/times `find_date_time_ranges`
+recognizes — found via a real document where both were misredacted. Rather than enumerating every
+possible short date/time layout as a new exclusion pattern, a floor on total digits rejects this whole
+class of false positive at once: 7 is the shortest digit count of any real phone format this project
+supports (a bare local number with no area code, e.g. `555-1234`).
+
 AWS access key IDs are matched by the fixed set of 4-letter type prefixes AWS documents (AKIA, ASIA,
 AIDA, AROA, and others identifying different IAM resource types) — not guaranteed exhaustive if AWS
 ever introduces a new prefix. The suffix length is a *minimum*, not an exact count: access keys are

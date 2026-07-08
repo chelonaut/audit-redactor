@@ -98,6 +98,36 @@ class TestPhoneNumberDetector:
         spans = self.detector.detect("Ext 12-34-5678 please.")
         assert _texts(spans) == {"12-34-5678"}
 
+    def test_partial_year_month_date_not_matched_as_phone(self) -> None:
+        # "2021-06" (year-month, no day) is only 2 groups / 6 digits -- not a
+        # 3-component date find_date_time_ranges recognizes, and not enough
+        # digits to plausibly be a phone number either. Found via a real
+        # document where this was misredacted.
+        spans = self.detector.detect("Report period: 2021-06 summary")
+        assert spans == []
+
+    def test_partial_hour_minute_time_not_matched_as_phone(self) -> None:
+        # "16.13" (hour.minute, no seconds) is only 2 groups / 4 digits --
+        # not a 3-component HH.MM.SS time find_date_time_ranges recognizes,
+        # and not enough digits to plausibly be a phone number either.
+        spans = self.detector.detect("Logged at 16.13 today")
+        assert spans == []
+
+    def test_short_local_phone_number_still_matched(self) -> None:
+        # A bare 7-digit local number (no area code) is the shortest real
+        # phone format this project supports -- the digit-count floor must
+        # not exclude it while excluding the 4-6 digit date/time fragments
+        # above.
+        spans = self.detector.detect("Call me at 555-1234 now.")
+        assert _texts(spans) == {"555-1234"}
+
+    def test_below_minimum_digit_count_not_matched(self) -> None:
+        # Below the 7-digit floor, a separator-shaped run stays unmatched
+        # even when it isn't a recognized date/time -- e.g. two arbitrary
+        # 2-digit groups.
+        spans = self.detector.detect("Section 12-34 of the report.")
+        assert spans == []
+
 
 class TestAwsAccessKeyIdDetector:
     def setup_method(self) -> None:

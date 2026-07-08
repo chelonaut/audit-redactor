@@ -61,6 +61,22 @@ _PHONE_RE = re.compile(
     r")(?!\w)"
 )
 
+# A minimum total digit count, not just "matches the separator-based shape,"
+# is what actually distinguishes a phone number from a short date/time
+# fragment: the pattern above's own minimum ("\d{2,4}" plus one repetition)
+# accepts as few as two 2-digit groups, which also matches things nobody
+# would call a phone number -- a truncated "2021-06" (year-month, no day)
+# or a bare "16.13" (hour.minute, no seconds) are both only 2 groups and
+# neither is covered by detectors/date_time.py's date/time shapes (which
+# require a full 3-component date or HH.MM.SS time) -- found via a real
+# document where both were misredacted as phone numbers. Rather than
+# enumerating every possible short date/time layout to add to the
+# exclusion list, a floor on total digits handles this whole class of
+# false positive at once: 7 is the shortest digit count of any real phone
+# number format this project already tests for (a bare US local number,
+# "555-1234").
+_MIN_PHONE_DIGITS = 7
+
 _EMAIL_RE = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?\.[A-Za-z]{2,}")
 
 # @-mention style usernames (GitHub, Slack, Notion, Jira, etc.), e.g. "@octocat".
@@ -100,6 +116,8 @@ class PhoneNumberDetector:
         spans = []
         for m in _PHONE_RE.finditer(text):
             if any(m.start() < end and start < m.end() for start, end in excluded):
+                continue
+            if sum(1 for ch in m.group() if ch.isdigit()) < _MIN_PHONE_DIGITS:
                 continue
             spans.append(
                 Span(

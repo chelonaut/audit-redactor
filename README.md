@@ -109,7 +109,9 @@ opaque keys have no fixed prefix). See PLAN.md 2.3 for the full reasoning.
 is from matters for auditability. A date/time shape (`2026-07-06`, `17.55.28`,
 an AWS CloudTrail export's `20260516T1805Z`) is recognized by checking its
 year/month/day/etc. components against plausible ranges, and the phone-number
-detector skips anything that overlaps one.
+detector skips anything that overlaps one. The phone detector also requires
+at least 7 total digits, so a partial date/time not covered by the above
+(e.g. `2021-06` or `16.13`) doesn't get misread as a short phone number.
 
 **Images (PNG/JPEG, and PDF pages that are just a raster image with no real
 text layer) are an exception**: every entity type redacts the *entire* OCR
