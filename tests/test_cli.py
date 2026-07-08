@@ -1,6 +1,7 @@
 from click.testing import CliRunner
 
 from audit_redactor.cli import EXIT_FATAL, EXIT_PARTIAL, EXIT_SUCCESS, main
+from audit_redactor.detectors.claude_augment import UsageTotals
 
 
 class TestExitCodes:
@@ -103,3 +104,43 @@ class TestExitCodes:
         assert (dest / "b.json").read_text(encoding="utf-8") == '{"prior": "output"}'
         assert "b.json" in result.output
         assert "already exists" in result.output
+
+
+class TestUsageSummary:
+    def test_offline_run_prints_no_usage_summary(self, tmp_path) -> None:
+        src = tmp_path / "in.json"
+        src.write_text('{"note": "nothing sensitive"}', encoding="utf-8")
+        dest = tmp_path / "out.json"
+
+        result = CliRunner().invoke(main, ["redact", str(src), str(dest), "--offline"])
+
+        assert "Claude usage" not in result.output
+
+    def test_single_file_run_prints_usage_summary_when_calls_were_made(self, tmp_path, monkeypatch) -> None:
+        src = tmp_path / "in.json"
+        src.write_text('{"note": "nothing sensitive"}', encoding="utf-8")
+        dest = tmp_path / "out.json"
+
+        monkeypatch.setattr(
+            "audit_redactor.cli.get_usage_totals",
+            lambda: UsageTotals(api_calls=3, input_tokens=1234, output_tokens=567),
+        )
+
+        result = CliRunner().invoke(main, ["redact", str(src), str(dest), "--offline"])
+
+        assert "Claude usage: 3 API call(s), 1,234 input tokens, 567 output tokens" in result.output
+
+    def test_batch_run_prints_usage_summary_when_calls_were_made(self, tmp_path, monkeypatch) -> None:
+        input_dir = tmp_path / "in"
+        input_dir.mkdir()
+        (input_dir / "a.json").write_text('{"note": "fine"}', encoding="utf-8")
+        dest = tmp_path / "out"
+
+        monkeypatch.setattr(
+            "audit_redactor.cli.get_usage_totals",
+            lambda: UsageTotals(api_calls=1, input_tokens=200, output_tokens=40),
+        )
+
+        result = CliRunner().invoke(main, ["redact", str(input_dir), str(dest), "--offline"])
+
+        assert "Claude usage: 1 API call(s), 200 input tokens, 40 output tokens" in result.output

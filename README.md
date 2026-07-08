@@ -37,6 +37,30 @@ audit-redactor redact input.pdf output.pdf --offline
 Batch runs never stop on a single file's error — every matched file is
 attempted, and a summary of successes/failures is printed at the end.
 
+### Progress output
+
+Redaction — especially the Claude augmentation pass — can take a while on
+large batches or multi-page PDFs, so the CLI prints its progress to stdout as
+it goes: which file it's on (`Processing file 3/10 (30%) - report.pdf...`,
+file-count based, not size — a deliberately rough estimate), which PDF page
+(`  Page 2/16...`), and when it's actually waiting on a Claude API call
+(`    Calling Claude...` / `    Claude responded.`) versus doing local work —
+useful for telling whether a slow run is stuck on Claude specifically. A
+final `Claude usage: N API call(s), X input tokens, Y output tokens` line
+totals usage across the whole run (silent if no Claude calls were made, e.g.
+`--offline`).
+
+### Claude API retries
+
+A transient Claude API failure (rate limiting, a 5xx server error, a network
+blip) is retried automatically with exponential backoff (1s, 2s, 4s, ... capped
+at 60s) up to 10 times before giving up on that one call. A non-retryable
+error (bad request, invalid API key) fails immediately without wasting the
+retry budget on something that can't succeed. If all 10 retries are
+exhausted, the Claude augmentation pass is disabled for the *rest of that
+run* (not just the one call) with a warning, and redaction continues
+local-only from there — the same graceful degradation as `--offline`.
+
 ### Exit codes
 
 | Code | Meaning |

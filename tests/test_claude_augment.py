@@ -1,10 +1,16 @@
 import warnings
 
+import anthropic
 import pytest
 
 from audit_redactor.detectors.base import EntityType, Span
 from audit_redactor.detectors.claude_augment import (
+    MAX_RETRIES,
+    circuit_breaker_is_open,
     claude_api_key_available,
+    get_usage_totals,
+    reset_circuit_breaker,
+    reset_usage_totals,
     run_claude_augmentation,
 )
 from audit_redactor.detectors.platform_identity import KnownIdentityDetector
@@ -18,10 +24,17 @@ class _FakeToolUseBlock:
         self.input = input_
 
 
+class _FakeUsage:
+    def __init__(self, input_tokens: int = 100, output_tokens: int = 20) -> None:
+        self.input_tokens = input_tokens
+        self.output_tokens = output_tokens
+
+
 class _FakeResponse:
-    def __init__(self, content: list, stop_reason: str = "tool_use") -> None:
+    def __init__(self, content: list, stop_reason: str = "tool_use", usage: _FakeUsage | None = None) -> None:
         self.content = content
         self.stop_reason = stop_reason
+        self.usage = usage or _FakeUsage()
 
 
 class _FakeMessages:
@@ -42,6 +55,31 @@ class _FakeClient:
         self.messages = _FakeMessages(response, exc)
 
 
+class _FlakyMessages:
+    """Raises `exc` for the first `fail_count` calls, then returns `response`
+    (or keeps raising forever if `fail_count` is never exhausted within the
+    number of calls actually made -- used to simulate a permanently broken
+    API for circuit-breaker tests).
+    """
+
+    def __init__(self, exc: Exception, fail_count: int, response: "_FakeResponse") -> None:
+        self._exc = exc
+        self._fail_count = fail_count
+        self._response = response
+        self.calls: list[dict] = []
+
+    def create(self, **kwargs):
+        self.calls.append(kwargs)
+        if len(self.calls) <= self._fail_count:
+            raise self._exc
+        return self._response
+
+
+class _FlakyClient:
+    def __init__(self, exc: Exception, fail_count: int, response: "_FakeResponse") -> None:
+        self.messages = _FlakyMessages(exc, fail_count, response)
+
+
 def _tool_response(spans: list[dict]) -> _FakeResponse:
     return _FakeResponse([_FakeToolUseBlock({"spans": spans})])
 
@@ -49,6 +87,20 @@ def _tool_response(spans: list[dict]) -> _FakeResponse:
 @pytest.fixture(autouse=True)
 def _no_env_key(monkeypatch) -> None:
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+
+
+@pytest.fixture(autouse=True)
+def _reset_usage_totals() -> None:
+    reset_usage_totals()
+
+
+@pytest.fixture(autouse=True)
+def _reset_breaker_and_skip_sleep(monkeypatch) -> None:
+    reset_circuit_breaker()
+    # Retry tests would otherwise really wait (worst case ~5 minutes for a
+    # full exhaustion with the 60s backoff cap) -- the retry *logic* is what's
+    # under test, not real wall-clock delay.
+    monkeypatch.setattr("audit_redactor.detectors.claude_augment.time.sleep", lambda _seconds: None)
 
 
 class TestClaudeApiKeyAvailable:
@@ -229,3 +281,139 @@ class TestIdentityDetectorClaudeOrdering:
             warnings.simplefilter("error")
             spans = run_claude_augmentation(text, [], offline=False, api_key="sk-ant-test", client=client)
         assert len(spans) == 1
+
+
+class TestUsageTotals:
+    def test_successful_call_accumulates_tokens(self) -> None:
+        text = "Contact Jane Doe for details."
+        client = _FakeClient(
+            _FakeResponse(
+                [_FakeToolUseBlock({"spans": []})],
+                usage=_FakeUsage(input_tokens=150, output_tokens=40),
+            )
+        )
+        run_claude_augmentation(text, [], offline=False, api_key="sk-ant-test", client=client)
+
+        totals = get_usage_totals()
+        assert totals.api_calls == 1
+        assert totals.input_tokens == 150
+        assert totals.output_tokens == 40
+
+    def test_multiple_calls_accumulate_across_calls(self) -> None:
+        text = "Contact Jane Doe for details."
+        client = _FakeClient(
+            _FakeResponse([_FakeToolUseBlock({"spans": []})], usage=_FakeUsage(100, 20))
+        )
+        run_claude_augmentation(text, [], offline=False, api_key="sk-ant-test", client=client)
+        run_claude_augmentation(text, [], offline=False, api_key="sk-ant-test", client=client)
+
+        totals = get_usage_totals()
+        assert totals.api_calls == 2
+        assert totals.input_tokens == 200
+        assert totals.output_tokens == 40
+
+    def test_offline_call_does_not_accumulate(self) -> None:
+        text = "Contact Jane Doe for details."
+        client = _FakeClient(_tool_response([]))
+        run_claude_augmentation(text, [], offline=True, client=client)
+
+        assert get_usage_totals().api_calls == 0
+
+    def test_api_error_does_not_accumulate(self) -> None:
+        import anthropic
+
+        class _FakeAPIError(anthropic.APIError):
+            def __init__(self, message: str) -> None:
+                self._message = message
+
+            def __str__(self) -> str:
+                return self._message
+
+        client = _FakeClient(_tool_response([]), exc=_FakeAPIError("boom"))
+        with pytest.warns(RuntimeWarning):
+            run_claude_augmentation(
+                "Contact Jane Doe.", [], offline=False, api_key="sk-ant-test", client=client
+            )
+
+        assert get_usage_totals().api_calls == 0
+
+    def test_reset_zeroes_totals(self) -> None:
+        text = "Contact Jane Doe for details."
+        client = _FakeClient(_tool_response([]))
+        run_claude_augmentation(text, [], offline=False, api_key="sk-ant-test", client=client)
+        assert get_usage_totals().api_calls == 1
+
+        reset_usage_totals()
+
+        totals = get_usage_totals()
+        assert totals.api_calls == 0
+        assert totals.input_tokens == 0
+        assert totals.output_tokens == 0
+
+
+class _FakeRateLimitError(anthropic.RateLimitError):
+    def __init__(self, message: str) -> None:
+        self._message = message
+
+    def __str__(self) -> str:
+        return self._message
+
+
+class TestRetryAndCircuitBreaker:
+    def test_retries_transient_error_then_succeeds(self) -> None:
+        text = "Contact Jane Doe for details."
+        exc = _FakeRateLimitError("rate limited")
+        client = _FlakyClient(exc, fail_count=3, response=_tool_response([{"text": "Jane Doe", "entity_type": "PERSON_NAME"}]))
+
+        spans = run_claude_augmentation(text, [], offline=False, api_key="sk-ant-test", client=client)
+
+        assert len(spans) == 1
+        assert spans[0].text == "Jane Doe"
+        assert len(client.messages.calls) == 4  # 3 failures + 1 success
+        assert circuit_breaker_is_open() is False
+        assert get_usage_totals().api_calls == 1  # only the successful call counts
+
+    def test_exhausts_retries_and_trips_circuit_breaker(self) -> None:
+        text = "Contact Jane Doe for details."
+        exc = _FakeRateLimitError("still rate limited")
+        client = _FlakyClient(exc, fail_count=MAX_RETRIES, response=_tool_response([]))
+
+        with pytest.warns(RuntimeWarning, match="disabling the Claude augmentation pass"):
+            spans = run_claude_augmentation(text, [], offline=False, api_key="sk-ant-test", client=client)
+
+        assert spans == []
+        assert len(client.messages.calls) == MAX_RETRIES
+        assert circuit_breaker_is_open() is True
+        assert get_usage_totals().api_calls == 0
+
+    def test_open_circuit_breaker_skips_call_entirely(self) -> None:
+        text = "Contact Jane Doe for details."
+        exc = _FakeRateLimitError("still rate limited")
+        first_client = _FlakyClient(exc, fail_count=MAX_RETRIES, response=_tool_response([]))
+        with pytest.warns(RuntimeWarning):
+            run_claude_augmentation(text, [], offline=False, api_key="sk-ant-test", client=first_client)
+        assert circuit_breaker_is_open() is True
+
+        second_client = _FakeClient(_tool_response([{"text": "Jane Doe", "entity_type": "PERSON_NAME"}]))
+        spans = run_claude_augmentation(text, [], offline=False, api_key="sk-ant-test", client=second_client)
+
+        assert spans == []
+        assert second_client.messages.calls == []  # never even attempted
+
+    def test_non_retryable_error_fails_immediately_without_retry(self) -> None:
+        class _FakeBadRequestError(anthropic.APIError):
+            def __init__(self, message: str) -> None:
+                self._message = message
+
+            def __str__(self) -> str:
+                return self._message
+
+        text = "Contact Jane Doe for details."
+        client = _FakeClient(_tool_response([]), exc=_FakeBadRequestError("bad request"))
+
+        with pytest.warns(RuntimeWarning, match="Claude augmentation pass skipped"):
+            spans = run_claude_augmentation(text, [], offline=False, api_key="sk-ant-test", client=client)
+
+        assert spans == []
+        assert len(client.messages.calls) == 1  # no retries for a non-transient error
+        assert circuit_breaker_is_open() is False

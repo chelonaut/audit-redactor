@@ -23,12 +23,117 @@ from __future__ import annotations
 
 import os
 import re
+import time
 import warnings
+from dataclasses import dataclass
 
-from anthropic import Anthropic, APIError
+from anthropic import (
+    Anthropic,
+    APIConnectionError,
+    APIError,
+    InternalServerError,
+    RateLimitError,
+)
 
 from audit_redactor.appliers.text import redact_text
 from audit_redactor.detectors.base import EntityType, Span
+
+
+@dataclass
+class UsageTotals:
+    """Running total of Claude API usage for the current process.
+
+    Module-level rather than threaded through every call site's return value
+    on purpose: this is a single-process, run-once-and-exit CLI tool, not a
+    long-lived server, so the usual objection to mutable global state (which
+    caller's total am I looking at?) doesn't apply -- there's only ever one
+    run. Threading a usage value through detect_text_with_claude, every
+    handler, pipeline.redact_file, and batch.run_batch just to report a
+    number at the very end would touch far more of the codebase for a purely
+    observational feature.
+    """
+
+    api_calls: int = 0
+    input_tokens: int = 0
+    output_tokens: int = 0
+
+
+_usage_totals = UsageTotals()
+
+
+def get_usage_totals() -> UsageTotals:
+    return _usage_totals
+
+
+def reset_usage_totals() -> None:
+    """Zero the running total. Call sites: the CLI entrypoint (defensive --
+    a fresh process already starts at zero) and tests, so one test's calls
+    don't bleed into another's assertions."""
+    global _usage_totals
+    _usage_totals = UsageTotals()
+
+
+# Retry only genuinely transient conditions -- a permanent error (bad
+# request, invalid API key) will never succeed no matter how many times
+# it's retried, so retrying it would just burn the whole budget (and several
+# minutes of wall-clock backoff) on something doomed from the first attempt.
+_RETRYABLE_ERRORS = (RateLimitError, InternalServerError, APIConnectionError)
+MAX_RETRIES = 10
+INITIAL_RETRY_DELAY = 1.0  # seconds
+MAX_RETRY_DELAY = 60.0  # seconds -- caps worst-case total wait to ~5 minutes
+
+# Circuit breaker: once retries are exhausted for any single call, every
+# later Claude call in this run gives up immediately rather than repeating
+# the same slow, doomed retry sequence per page/chunk. Module-level for the
+# same reason as UsageTotals above -- single-process, run-once CLI, not a
+# long-lived server.
+_circuit_breaker_open = False
+
+
+def circuit_breaker_is_open() -> bool:
+    return _circuit_breaker_open
+
+
+def reset_circuit_breaker() -> None:
+    global _circuit_breaker_open
+    _circuit_breaker_open = False
+
+
+def _call_claude_with_retry(anthropic_client: Anthropic, **create_kwargs):
+    """Call `anthropic_client.messages.create(**create_kwargs)`, retrying
+    transient failures with exponential backoff.
+
+    Returns the response, or `None` if every retry was exhausted -- at which
+    point the circuit breaker is tripped (with a warning) and the caller
+    should treat this exactly like `offline`. A non-retryable `APIError`
+    propagates immediately for the caller's existing handling.
+    """
+    global _circuit_breaker_open
+
+    delay = INITIAL_RETRY_DELAY
+    for attempt in range(1, MAX_RETRIES + 1):
+        try:
+            return anthropic_client.messages.create(**create_kwargs)
+        except _RETRYABLE_ERRORS as exc:
+            if attempt == MAX_RETRIES:
+                _circuit_breaker_open = True
+                warnings.warn(
+                    f"Claude API failed after {MAX_RETRIES} retries ({exc}) -- "
+                    "disabling the Claude augmentation pass for the rest of this "
+                    "run and falling back to local-only redaction from here on.",
+                    RuntimeWarning,
+                    stacklevel=3,
+                )
+                return None
+            print(
+                f"    Claude API error (attempt {attempt}/{MAX_RETRIES}): {exc} "
+                f"-- retrying in {delay:.0f}s...",
+                flush=True,
+            )
+            time.sleep(delay)
+            delay = min(delay * 2, MAX_RETRY_DELAY)
+    return None  # unreachable, satisfies type checkers
+
 
 # Cost-sensitive by design (PLAN.md 2.9: "~$5-14 per 1000 documents at
 # Haiku/Sonnet pricing") -- this is a bulk, per-document extraction pass, not
@@ -161,12 +266,16 @@ def run_claude_augmentation(
     missed, and return them as fully-grounded `Span`s against `text`.
 
     Returns `[]` (never raises) when `offline` is set, no API key is
-    available, or the API call itself fails -- PLAN.md 2.8: Claude is
-    strictly additive, never a dependency for baseline safety. An API
-    failure emits a warning rather than failing silently, so a persistently
-    broken key doesn't go unnoticed.
+    available, the circuit breaker is open (see `_call_claude_with_retry`),
+    or the API call itself fails after retries -- PLAN.md 2.8: Claude is
+    strictly additive, never a dependency for baseline safety. A failure
+    emits a warning rather than failing silently, so a persistently broken
+    key (or a fully exhausted retry budget) doesn't go unnoticed.
     """
     if offline or not claude_api_key_available(api_key):
+        return []
+
+    if _circuit_breaker_open:
         return []
 
     partially_redacted = redact_text(text, existing_spans)
@@ -174,8 +283,10 @@ def run_claude_augmentation(
         return []
 
     anthropic_client = client or Anthropic(api_key=api_key)
+    print("    Calling Claude...", flush=True)
     try:
-        response = anthropic_client.messages.create(
+        response = _call_claude_with_retry(
+            anthropic_client,
             model=model,
             max_tokens=DEFAULT_MAX_TOKENS,
             system=_SYSTEM_PROMPT,
@@ -186,6 +297,16 @@ def run_claude_augmentation(
     except APIError as exc:
         warnings.warn(f"Claude augmentation pass skipped: {exc}", RuntimeWarning, stacklevel=2)
         return []
+
+    if response is None:
+        # Retries exhausted -- _call_claude_with_retry already tripped the
+        # circuit breaker and warned; nothing more to do here.
+        return []
+    print("    Claude responded.", flush=True)
+
+    _usage_totals.api_calls += 1
+    _usage_totals.input_tokens += response.usage.input_tokens
+    _usage_totals.output_tokens += response.usage.output_tokens
 
     if response.stop_reason == "max_tokens":
         # The tool-call response was cut off mid-generation before Claude

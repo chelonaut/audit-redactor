@@ -67,8 +67,17 @@ def run_batch(resolved: ResolvedInputs, output_dir: Path, offline: bool) -> Batc
     output_dir.mkdir(parents=True, exist_ok=True)
     succeeded: list[tuple[Path, Path]] = []
     failed: list[tuple[Path, str]] = []
+    total = len(resolved.files)
 
-    for input_path in resolved.files:
+    for index, input_path in enumerate(resolved.files, start=1):
+        # File-count-based, not size-based -- a deliberately rough estimate
+        # (PLAN.md doesn't need per-byte progress, just a sense of how far
+        # through a large batch the run has gotten), printed as each file
+        # starts so it's visible immediately rather than only after slow
+        # per-file work (Claude calls in particular) completes.
+        pct = round(100 * index / total)
+        print(f"Processing file {index}/{total} ({pct}%) - {input_path.name}...", flush=True)
+
         try:
             rel = input_path.relative_to(resolved.base_dir)
         except ValueError:

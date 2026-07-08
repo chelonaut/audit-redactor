@@ -202,11 +202,13 @@ def redact_pdf(input_path: Path, output_path: Path, offline: bool) -> Path:
         identity_detector = KnownIdentityDetector(find_identity_usernames(discovery_texts))
 
         spans_by_page: list[list[Span]] = []
+        page_count = len(pages_info)
         # Fixed upfront: a scanned-page replacement deletes and re-inserts a
         # page at the same index, leaving the total page count (and every
         # other page's index) unchanged, so iterating a pre-computed range
         # stays valid throughout.
         for page_index, (text, char_bboxes, scanned) in enumerate(pages_info):
+            print(f"  Page {page_index + 1}/{page_count}...", flush=True)
             page = doc[page_index]
             if scanned:
                 spans = _redact_scanned_page(doc, page_index, offline, identity_detector)

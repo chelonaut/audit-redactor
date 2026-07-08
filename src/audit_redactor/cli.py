@@ -7,7 +7,12 @@ import click
 
 from audit_redactor import __version__
 from audit_redactor.batch import resolve_inputs, run_batch
-from audit_redactor.detectors.claude_augment import claude_api_key_available
+from audit_redactor.detectors.claude_augment import (
+    claude_api_key_available,
+    get_usage_totals,
+    reset_circuit_breaker,
+    reset_usage_totals,
+)
 from audit_redactor.pipeline import redact_file
 
 # PLAN.md build phase 10: distinct exit codes for "couldn't run at all" vs.
@@ -16,6 +21,21 @@ from audit_redactor.pipeline import redact_file
 EXIT_SUCCESS = 0
 EXIT_FATAL = 1  # bad input, unsupported format, or every file in a batch failed
 EXIT_PARTIAL = 2  # batch mode: at least one file succeeded, at least one failed
+
+
+def _print_usage_summary() -> None:
+    """Report Claude API token usage for this run -- silent if no calls were
+    made (--offline, no key, or every chunk was fully covered by the local
+    regex/company-list pass alone), so it adds no noise to the common case
+    this project already warns about separately.
+    """
+    totals = get_usage_totals()
+    if totals.api_calls == 0:
+        return
+    click.echo(
+        f"Claude usage: {totals.api_calls} API call(s), "
+        f"{totals.input_tokens:,} input tokens, {totals.output_tokens:,} output tokens"
+    )
 
 
 @click.group()
@@ -48,6 +68,16 @@ def redact(input_spec: str, output_path: Path, offline: bool) -> None:
     partial (batch mode only -- at least one file succeeded and at least one
     failed, e.g. a PDF verification-pass failure on just that one file).
     """
+    # A fresh process already starts at zero/closed, but resetting here
+    # matters for repeated in-process invocations (e.g. the test suite's
+    # CliRunner) so one run's usage/circuit-breaker state never bleeds into
+    # the next. Resetting once here, before any file/page processing starts,
+    # doesn't undermine the breaker's "stays open for the rest of this run"
+    # behavior -- it only re-initializes state at the boundary *between*
+    # separate CLI invocations.
+    reset_usage_totals()
+    reset_circuit_breaker()
+
     try:
         resolved = resolve_inputs(input_spec)
     except FileNotFoundError as exc:
@@ -79,8 +109,10 @@ def redact(input_spec: str, output_path: Path, offline: bool) -> None:
             actual = redact_file(resolved.files[0], output_path, offline)
         except Exception as exc:  # noqa: BLE001 - surfaced to the user as a CLI error
             click.echo(f"error: {exc}", err=True)
+            _print_usage_summary()
             sys.exit(EXIT_FATAL)
         click.echo(f"redacted: {resolved.files[0]} -> {actual}")
+        _print_usage_summary()
         return
 
     result = run_batch(resolved, output_path, offline)
@@ -90,6 +122,10 @@ def redact(input_spec: str, output_path: Path, offline: bool) -> None:
         click.echo(f"{len(result.failed)}/{result.total} files failed:")
         for path, reason in result.failed:
             click.echo(f"  {path}: {reason}")
+
+    _print_usage_summary()
+
+    if result.failed:
         sys.exit(EXIT_PARTIAL if result.succeeded else EXIT_FATAL)
 
 
