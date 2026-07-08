@@ -6,15 +6,6 @@ A hybrid, auditable tool that redacts sensitive data (AWS account numbers, perso
 usernames/emails, phone numbers, client company names, URLs) from documents before they're shared
 with auditors. Runs as a Dockerized Python CLI, portable between a local Mac and CI/CD.
 
-**Note on scope:** this is a standalone pipeline, distinct from the existing Claude Code skill at
-`plugins/chelonaut/skills/redact/SKILL.md` in the `chelonaut/claude-skills` repo. That skill redacts
-by having Claude reason over file contents live, in-session, with no local ML and no web search (to
-avoid leaking content mid-redaction). This new tool takes a different approach — a deterministic
-core that runs first and does most of the work locally, with Claude used only as an optional,
-bounded, post-hoc augmentation step — specifically to solve the old skill's speed/token-cost
-problem. **This tool lives in its own repo, `chelonaut/audit-redactor`**, separate from the skills
-marketplace repo.
-
 ---
 
 ## 2. Key Design Decisions
@@ -44,7 +35,7 @@ marketplace repo.
 | AWS access key IDs (AKIA/ASIA/etc.) | Regex | Mask all but the 4-character type prefix and last 4 characters |
 | Phone numbers | Regex | Redact all digits completely |
 | Emails / usernames (GitHub, Jira, Notion, etc.) | Regex | Full redaction |
-| Platform usernames identified from a profile/repo URL (e.g. GitHub) | Cross-reference (detectors/platform_identity.py) | Full redaction |
+| Platform usernames identified from a profile/repo URL (e.g. GitHub) or a "User:"/"Username:" label | Cross-reference (detectors/platform_identity.py) | Full redaction |
 | URLs | Regex | Redact entire URL incl. scheme |
 | Slack tokens (`xoxb-`/`xoxp-`/`xapp-`/etc.) and incoming webhook URLs | Regex (detectors/api_keys.py) | Full redaction |
 | Atlassian Cloud API tokens (`ATATT3...` — covers Jira and Confluence) | Regex | Full redaction |
@@ -290,23 +281,26 @@ regex core (AWS #s, phones, emails, URLs, curated company names)
    → redact immediately (highest confidence, always applied)
       │
       ▼
-  ┌─── no API key / --offline ───────────────┐
-  │                                            │
-  ▼                                            ▼
-apply filename + metadata scrub          Claude augmentation pass
-      │                                   (full already-redacted text in,
-      │                                    compact span-list tool call out)
-      │                                            │
-      │                                    grounding check
-      │                                    (reject non-verbatim spans)
-      │                                            │
-      │                                    apply additional spans
-      │                                            │
-      └──────────────────► apply filename + metadata scrub
-                                    │
-                                    ▼
-                            final redacted output
-                         (original file untouched)
+  ┌─── no API key / --offline ───┐
+  │                              │
+  ▼                              ▼
+  │                              Claude augmentation pass
+  │                              (full already-redacted text in,
+  │                               compact span-list tool call out)
+  │                              │
+  │                              grounding check
+  │                              (reject non-verbatim spans)
+  │                              │
+  │                              apply additional spans
+  │                              │
+  └──────────────┬───────────────┘
+                 │
+                 ▼
+  apply filename + metadata scrub
+                 │
+                 ▼
+       final redacted output
+     (original file untouched)
 ```
 
 (A local NER pass was drafted between the regex core and the offline/Claude branch above, but is
@@ -316,7 +310,7 @@ deferred — see 2.8's "Local NER" note.)
 
 ## 4. Build phases
 
-1. **Repo & scaffolding** — repo already created (`chelonaut/audit-redactor`); add Dockerfile
+1. **Repo & scaffolding** — repo already created; add Dockerfile
    (Python base + Playwright/Chromium + Tesseract); CLI entrypoint skeleton.
 2. **Regex core** — AWS account numbers, phone numbers, emails/usernames, URLs; curated company-name
    matcher; unit tests with synthetic fixtures for each pattern.
@@ -369,8 +363,5 @@ deferred — see 2.8's "Local NER" note.)
    applied to is deferred (see 2.8) — revisit only if that phase is picked back up.
 
 ## 6. Non-goals
-- This tool does not replace the existing `plugins/chelonaut/skills/redact` Claude Code skill
-  outright (that decision is the user's to make once this tool is working) — it is a separate,
-  faster-by-design alternative.
 - No web search or external network calls during the redaction pass itself outside the bounded
   Claude augmentation step — company-list maintenance is a separate, offline-from-redaction activity.
