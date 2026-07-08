@@ -209,18 +209,18 @@ class TestSensitiveLinks:
         result.close()
 
     def test_link_uri_revealing_identified_username_is_removed(self, tmp_path) -> None:
-        # A GitHub profile/repo link is a signal that "chelonaut" is a
+        # A GitHub profile/repo link is a signal that "octocat" is a
         # username (platform_identity.py) even though the link URI itself
         # matches nothing else (no AWS ID/email/phone/company).
         src = tmp_path / "doc.pdf"
         doc = fitz.open()
         page = doc.new_page()
-        page.insert_text((72, 72), "chelonaut")
+        page.insert_text((72, 72), "octocat")
         page.insert_link(
             {
                 "kind": fitz.LINK_URI,
                 "from": fitz.Rect(72, 90, 300, 110),
-                "uri": "https://github.com/chelonaut/claude-news-aggregator-prompt/commits?author=chelonaut",
+                "uri": "https://github.com/octocat/claude-news-aggregator-prompt/commits?author=octocat",
             }
         )
         doc.save(src)
@@ -232,7 +232,7 @@ class TestSensitiveLinks:
         result = fitz.open(dest)
         assert result[0].get_links() == []
         result.close()
-        assert b"chelonaut" not in dest.read_bytes()
+        assert b"octocat" not in dest.read_bytes()
 
 
 class TestIdentityDiscoveryAcrossPages:
@@ -240,16 +240,16 @@ class TestIdentityDiscoveryAcrossPages:
         src = tmp_path / "doc.pdf"
         doc = fitz.open()
         page1 = doc.new_page()
-        page1.insert_text((72, 72), "chelonaut")
+        page1.insert_text((72, 72), "octocat")
         page1.insert_link(
             {
                 "kind": fitz.LINK_URI,
                 "from": fitz.Rect(72, 60, 200, 90),
-                "uri": "https://github.com/chelonaut",
+                "uri": "https://github.com/octocat",
             }
         )
         page2 = doc.new_page()
-        page2.insert_text((72, 72), "chelonaut authored this with no link at all")
+        page2.insert_text((72, 72), "octocat authored this with no link at all")
         doc.save(src)
         doc.close()
         dest = tmp_path / "out.pdf"
@@ -259,8 +259,8 @@ class TestIdentityDiscoveryAcrossPages:
         result = fitz.open(dest)
         full_text = "".join(p.get_text() for p in result)
         result.close()
-        assert "chelonaut" not in full_text
-        assert b"chelonaut" not in dest.read_bytes()
+        assert "octocat" not in full_text
+        assert b"octocat" not in dest.read_bytes()
 
 
 class TestScannedPage:

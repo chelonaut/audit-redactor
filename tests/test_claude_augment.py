@@ -227,15 +227,15 @@ class TestIdentityDetectorClaudeOrdering:
     """
 
     def test_identified_username_is_masked_before_claude_sees_the_text(self) -> None:
-        text = "Contact chelonaut for details."
-        identity_detector = KnownIdentityDetector({"chelonaut"})
+        text = "Contact octocat for details."
+        identity_detector = KnownIdentityDetector({"octocat"})
         existing = detect_text(text, identity_detector=identity_detector)
 
         client = _FakeClient(_tool_response([]))
         run_claude_augmentation(text, existing, offline=False, api_key="sk-ant-test", client=client)
 
         sent_text = client.messages.calls[0]["messages"][0]["content"]
-        assert "chelonaut" not in sent_text
+        assert "octocat" not in sent_text
         assert "(REDACTED)" in sent_text
 
     def test_claude_reporting_the_same_span_is_rejected_as_already_covered(self) -> None:
@@ -244,11 +244,11 @@ class TestIdentityDetectorClaudeOrdering:
         # the grounding/exclude check must drop it -- proving no duplicate,
         # differently-typed span for the same text can ever reach
         # merge_spans.
-        text = "Contact chelonaut for details."
-        identity_detector = KnownIdentityDetector({"chelonaut"})
+        text = "Contact octocat for details."
+        identity_detector = KnownIdentityDetector({"octocat"})
         existing = detect_text(text, identity_detector=identity_detector)
 
-        client = _FakeClient(_tool_response([{"text": "chelonaut", "entity_type": "PERSON_NAME"}]))
+        client = _FakeClient(_tool_response([{"text": "octocat", "entity_type": "PERSON_NAME"}]))
         claude_spans = run_claude_augmentation(
             text, existing, offline=False, api_key="sk-ant-test", client=client
         )

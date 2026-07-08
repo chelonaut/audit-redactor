@@ -82,24 +82,24 @@ class TestRedactHtmlSource:
         # still be found and redacted.
         html = (
             "<html><body>"
-            '<a href="https://github.com/chelonaut/secret-repo">click here</a>'
-            "<p>chelonaut mentioned again with no link</p>"
+            '<a href="https://github.com/octocat/secret-repo">click here</a>'
+            "<p>octocat mentioned again with no link</p>"
             "</body></html>"
         )
         redacted, spans = redact_html_source(html)
-        assert "chelonaut" not in redacted
+        assert "octocat" not in redacted
         assert "click here" in redacted
-        assert any(span.text == "chelonaut" for span in spans)
+        assert any(span.text == "octocat" for span in spans)
 
     def test_discovers_username_from_img_src(self) -> None:
         html = (
             "<html><body>"
-            '<img src="https://github.com/chelonaut">'
-            "<p>Reviewed by chelonaut.</p>"
+            '<img src="https://github.com/octocat">'
+            "<p>Reviewed by octocat.</p>"
             "</body></html>"
         )
         redacted, _ = redact_html_source(html)
-        assert "chelonaut" not in redacted
+        assert "octocat" not in redacted
 
 
 class TestHtmlHandler:

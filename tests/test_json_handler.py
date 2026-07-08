@@ -96,9 +96,9 @@ class TestJsonHandler:
         src.write_text(
             json.dumps(
                 {
-                    "profile_url": "https://github.com/chelonaut",
-                    "author": "chelonaut",
-                    "note": "reviewed by chelonaut yesterday",
+                    "profile_url": "https://github.com/octocat",
+                    "author": "octocat",
+                    "note": "reviewed by octocat yesterday",
                 }
             ),
             encoding="utf-8",
@@ -108,6 +108,6 @@ class TestJsonHandler:
         redact_file(src, dest, True)
 
         redacted = json.loads(dest.read_text(encoding="utf-8"))
-        assert "chelonaut" not in redacted["profile_url"]
+        assert "octocat" not in redacted["profile_url"]
         assert redacted["author"] == "(REDACTED)"
-        assert "chelonaut" not in redacted["note"]
+        assert "octocat" not in redacted["note"]

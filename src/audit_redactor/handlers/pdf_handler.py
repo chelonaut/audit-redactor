@@ -183,7 +183,7 @@ def redact_pdf(input_path: Path, output_path: Path, offline: bool) -> Path:
         # the whole document (platform_identity.py) before any real
         # redaction work happens -- a username can be the target of a link
         # on page 1 and a bare, unlinked mention on page 3, so this has to
-        # see the whole document before deciding what "chelonaut" means.
+        # see the whole document before deciding what "octocat" means.
         # Scanned pages' OCR text isn't available yet at this point (that
         # only happens during the real per-page redaction pass below), so
         # they don't contribute to discovery -- see platform_identity.py's

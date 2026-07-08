@@ -108,8 +108,8 @@ class TestMarkdownHandler:
     def test_discovers_username_from_link_and_redacts_bare_mention(self, tmp_path) -> None:
         src = tmp_path / "notes.md"
         src.write_text(
-            "See [my profile](https://github.com/chelonaut) for more.\n"
-            "chelonaut is the author of this repo.\n",
+            "See [my profile](https://github.com/octocat) for more.\n"
+            "octocat is the author of this repo.\n",
             encoding="utf-8",
         )
         dest = tmp_path / "out.md"
@@ -117,7 +117,7 @@ class TestMarkdownHandler:
         actual = redact_file(src, dest, True)
 
         text = _extract_text(actual)
-        assert "chelonaut" not in text
+        assert "octocat" not in text
 
     def test_fenced_code_block_preserves_line_breaks_and_indentation(self, tmp_path) -> None:
         # Regression test: without the "fenced_code" markdown extension, a

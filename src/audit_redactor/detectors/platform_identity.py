@@ -6,8 +6,8 @@ sensitive too.
 Every other detector in this project (regex core, company list, Claude)
 looks at one isolated chunk of text with no memory of anything else in the
 document. This one is fundamentally different: a URL like
-`https://github.com/chelonaut/some-repo` is itself already redacted as a
-plain URL span, but the bare word "chelonaut" showing up elsewhere with no
+`https://github.com/octocat/some-repo` is itself already redacted as a
+plain URL span, but the bare word "octocat" showing up elsewhere with no
 URL around it (a page's nav bar, an "authored by" line, a commit-author
 breadcrumb) isn't caught by anything else -- it isn't an email, phone
 number, AWS ID, @mention, or curated company name.
