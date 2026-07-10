@@ -144,3 +144,78 @@ class TestUsageSummary:
         result = CliRunner().invoke(main, ["redact", str(input_dir), str(dest), "--offline"])
 
         assert "Claude usage: 1 API call(s), 200 input tokens, 40 output tokens" in result.output
+
+
+class TestCompanyListOption:
+    """--company-list (falling back to ~/client_names.txt) per PLAN.md 2.10 --
+    lets a real, private client list live outside the repo instead of
+    overwriting the bundled safe-sample data file that's checked into git.
+    """
+
+    def test_explicit_company_list_is_used(self, tmp_path, monkeypatch) -> None:
+        monkeypatch.setattr("audit_redactor.cli._DEFAULT_COMPANY_LIST_PATH", tmp_path / "unused.txt")
+        company_list = tmp_path / "clients.txt"
+        company_list.write_text("Acme Corp\n", encoding="utf-8")
+        src = tmp_path / "in.json"
+        src.write_text('{"note": "Contract with Acme Corp signed today."}', encoding="utf-8")
+        dest = tmp_path / "out.json"
+
+        result = CliRunner().invoke(
+            main, ["redact", str(src), str(dest), "--offline", "--company-list", str(company_list)]
+        )
+
+        assert result.exit_code == EXIT_SUCCESS
+        assert f"using {company_list} for company names redaction" in result.output
+        assert "Acme Corp" not in dest.read_text(encoding="utf-8")
+
+    def test_env_var_is_used_when_no_flag_given(self, tmp_path, monkeypatch) -> None:
+        # redact.sh (the Docker wrapper) has no way to bind-mount the right
+        # host file without first knowing its path -- rather than parsing
+        # --company-list out of the CLI args to find that path, it reads
+        # AUDIT_REDACTOR_COMPANY_LIST from the shell and forwards it as-is,
+        # relying on Click's `envvar=` support picking it up here exactly
+        # like an explicit --company-list would.
+        monkeypatch.setattr("audit_redactor.cli._DEFAULT_COMPANY_LIST_PATH", tmp_path / "unused.txt")
+        company_list = tmp_path / "clients.txt"
+        company_list.write_text("Acme Corp\n", encoding="utf-8")
+        src = tmp_path / "in.json"
+        src.write_text('{"note": "Contract with Acme Corp signed today."}', encoding="utf-8")
+        dest = tmp_path / "out.json"
+
+        result = CliRunner().invoke(
+            main,
+            ["redact", str(src), str(dest), "--offline"],
+            env={"AUDIT_REDACTOR_COMPANY_LIST": str(company_list)},
+        )
+
+        assert result.exit_code == EXIT_SUCCESS
+        assert f"using {company_list} for company names redaction" in result.output
+        assert "Acme Corp" not in dest.read_text(encoding="utf-8")
+
+    def test_default_path_used_when_no_flag_given(self, tmp_path, monkeypatch) -> None:
+        default_list = tmp_path / "client_names.txt"
+        default_list.write_text("Acme Corp\n", encoding="utf-8")
+        monkeypatch.setattr("audit_redactor.cli._DEFAULT_COMPANY_LIST_PATH", default_list)
+        src = tmp_path / "in.json"
+        src.write_text('{"note": "Contract with Acme Corp signed today."}', encoding="utf-8")
+        dest = tmp_path / "out.json"
+
+        result = CliRunner().invoke(main, ["redact", str(src), str(dest), "--offline"])
+
+        assert result.exit_code == EXIT_SUCCESS
+        assert f"using {default_list} for company names redaction" in result.output
+        assert "Acme Corp" not in dest.read_text(encoding="utf-8")
+
+    def test_missing_default_path_warns_and_falls_back_to_bundled_sample(self, tmp_path, monkeypatch) -> None:
+        monkeypatch.setattr("audit_redactor.cli._DEFAULT_COMPANY_LIST_PATH", tmp_path / "does_not_exist.txt")
+        src = tmp_path / "in.json"
+        # "Tesco" is one of the bundled safe-sample list's entries.
+        src.write_text('{"note": "Compared prices at Tesco today."}', encoding="utf-8")
+        dest = tmp_path / "out.json"
+
+        result = CliRunner().invoke(main, ["redact", str(src), str(dest), "--offline"])
+
+        assert result.exit_code == EXIT_SUCCESS
+        assert "not found" in result.output
+        assert "falling back to the bundled sample list" in result.output
+        assert "Tesco" not in dest.read_text(encoding="utf-8")

@@ -7,6 +7,7 @@ import click
 
 from audit_redactor import __version__
 from audit_redactor.batch import resolve_inputs, run_batch
+from audit_redactor.detectors import configure_default_company_list
 from audit_redactor.detectors.claude_augment import (
     claude_api_key_available,
     get_usage_totals,
@@ -14,6 +15,12 @@ from audit_redactor.detectors.claude_augment import (
     reset_usage_totals,
 )
 from audit_redactor.pipeline import redact_file
+
+# Checked into version control only as the safe example/starter list
+# (audit_redactor/data/company_names.txt) -- real client names belong in a
+# private file outside the repo, and this is where a user is expected to
+# keep theirs unless they pass --company-list to point somewhere else.
+_DEFAULT_COMPANY_LIST_PATH = Path.home() / "client_names.txt"
 
 # PLAN.md build phase 10: distinct exit codes for "couldn't run at all" vs.
 # "ran, but something needs a look" vs. clean success -- lets a CI pipeline
@@ -53,7 +60,23 @@ def main() -> None:
     default=False,
     help="Disable all network calls; rely solely on the local deterministic + ML layers.",
 )
-def redact(input_spec: str, output_path: Path, offline: bool) -> None:
+@click.option(
+    "--company-list",
+    "company_list_path",
+    envvar="AUDIT_REDACTOR_COMPANY_LIST",
+    type=click.Path(path_type=Path, dir_okay=False),
+    default=None,
+    help=(
+        "Path to your curated, private client-company-name list (one name per "
+        f"line). Also settable via the AUDIT_REDACTOR_COMPANY_LIST env var -- "
+        "the only way to configure this through redact.sh's Docker wrapper, "
+        "which forwards that variable and bind-mounts the file it points at "
+        "rather than taking a CLI flag itself. Defaults to "
+        f"{_DEFAULT_COMPANY_LIST_PATH}; if that file doesn't exist either, "
+        "falls back to the bundled safe sample list with a warning."
+    ),
+)
+def redact(input_spec: str, output_path: Path, offline: bool, company_list_path: Path | None) -> None:
     """Redact INPUT_SPEC and write the result to OUTPUT_PATH.
 
     INPUT_SPEC may be a single file, a directory (recursed), or a glob
@@ -77,6 +100,21 @@ def redact(input_spec: str, output_path: Path, offline: bool) -> None:
     # separate CLI invocations.
     reset_usage_totals()
     reset_circuit_breaker()
+
+    resolved_company_list = company_list_path or _DEFAULT_COMPANY_LIST_PATH
+    if resolved_company_list.exists():
+        configure_default_company_list(resolved_company_list)
+        click.secho(f"ℹ️  using {resolved_company_list} for company names redaction", err=True, fg="cyan")
+    else:
+        click.secho(
+            f"⚠️  WARNING: company list '{resolved_company_list}' not found -- falling back to "
+            "the bundled sample list (well-known chains, not your real clients). Pass "
+            "--company-list to point at your curated list.",
+            err=True,
+            fg="yellow",
+            bold=True,
+        )
+        configure_default_company_list(None)
 
     try:
         resolved = resolve_inputs(input_spec)
