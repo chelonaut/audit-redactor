@@ -1,3 +1,4 @@
+import fitz
 from click.testing import CliRunner
 
 from audit_redactor.cli import EXIT_FATAL, EXIT_PARTIAL, EXIT_SUCCESS, main
@@ -104,6 +105,48 @@ class TestExitCodes:
         assert (dest / "b.json").read_text(encoding="utf-8") == '{"prior": "output"}'
         assert "b.json" in result.output
         assert "already exists" in result.output
+
+
+class TestIgnoreVerifyFailureOption:
+    def _make_pdf(self, path) -> None:
+        doc = fitz.open()
+        doc.new_page()
+        doc.save(path)
+        doc.close()
+
+    def test_verification_failure_exits_fatal_by_default(self, tmp_path, monkeypatch) -> None:
+        src = tmp_path / "doc.pdf"
+        self._make_pdf(src)
+        dest = tmp_path / "out.pdf"
+
+        def _always_fails(*args, **kwargs):
+            raise RuntimeError("boom")
+
+        monkeypatch.setattr("audit_redactor.handlers.pdf_handler.verify_pdf_redacted", _always_fails)
+
+        result = CliRunner().invoke(main, ["redact", str(src), str(dest), "--offline"])
+
+        assert result.exit_code == EXIT_FATAL
+        assert not dest.exists()
+
+    def test_ignore_verify_failure_flag_keeps_output_and_exits_zero(self, tmp_path, monkeypatch) -> None:
+        src = tmp_path / "doc.pdf"
+        self._make_pdf(src)
+        dest = tmp_path / "out.pdf"
+
+        def _always_fails(*args, **kwargs):
+            raise RuntimeError("boom")
+
+        monkeypatch.setattr("audit_redactor.handlers.pdf_handler.verify_pdf_redacted", _always_fails)
+
+        result = CliRunner().invoke(
+            main, ["redact", str(src), str(dest), "--offline", "--ignore-verify-failure"]
+        )
+
+        assert result.exit_code == EXIT_SUCCESS
+        assert dest.exists()
+        assert "--ignore-verify-failure" in result.output
+        assert "⚠️" in result.output
 
 
 class TestUsageSummary:

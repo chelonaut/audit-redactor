@@ -199,6 +199,23 @@ class TestUsernameMentionDetector:
         spans = self.detector.detect("Email jane@example.com only.")
         assert spans == []
 
+    def test_single_character_mention_not_matched(self) -> None:
+        # A bare "@O" out of an unrelated sentence isn't a plausible
+        # username -- found via a real document where one was flagged as
+        # USERNAME_MENTION and then failed post-save verification purely
+        # because a needle that short can coincidentally turn up anywhere in
+        # a file's raw bytes.
+        spans = self.detector.detect("Reach out to @O about this.")
+        assert spans == []
+
+    def test_three_character_mention_not_matched(self) -> None:
+        spans = self.detector.detect("Assigned to @abc for review.")
+        assert spans == []
+
+    def test_four_character_mention_is_the_minimum_matched(self) -> None:
+        spans = self.detector.detect("Assigned to @abcd for review.")
+        assert _texts(spans) == {"@abcd"}
+
 
 class TestUrlDetector:
     def setup_method(self) -> None:

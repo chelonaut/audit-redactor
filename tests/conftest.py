@@ -1,5 +1,6 @@
 import pytest
 
+from audit_redactor.appliers.output_guard import configure_ignore_verify_failure
 from audit_redactor.detectors import configure_default_company_list
 
 
@@ -19,3 +20,16 @@ def _reset_default_company_list():
     configure_default_company_list(None)
     yield
     configure_default_company_list(None)
+
+
+@pytest.fixture(autouse=True)
+def _reset_ignore_verify_failure():
+    """Reset the --ignore-verify-failure toggle before and after every test,
+    same rationale as `_reset_default_company_list` above -- it's process-
+    wide state that would otherwise leak between tests (or from a
+    `tests/test_cli.py` run into every other test module's verification
+    assertions) once any test turns it on.
+    """
+    configure_ignore_verify_failure(False)
+    yield
+    configure_ignore_verify_failure(False)

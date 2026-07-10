@@ -6,6 +6,7 @@ from pathlib import Path
 import click
 
 from audit_redactor import __version__
+from audit_redactor.appliers.output_guard import configure_ignore_verify_failure
 from audit_redactor.batch import resolve_inputs, run_batch
 from audit_redactor.detectors import configure_default_company_list
 from audit_redactor.detectors.claude_augment import (
@@ -76,7 +77,25 @@ def main() -> None:
         "falls back to the bundled safe sample list with a warning."
     ),
 )
-def redact(input_spec: str, output_path: Path, offline: bool, company_list_path: Path | None) -> None:
+@click.option(
+    "--ignore-verify-failure",
+    is_flag=True,
+    default=False,
+    help=(
+        "Emergency escape hatch: on a post-redaction verification failure, keep "
+        "the output file and warn instead of deleting it and erroring out. Never "
+        "the default -- only for when losing an expensive Claude-augmented pass "
+        "to one verification failure is worse than shipping output that needs "
+        "manual review. Always check flagged output carefully before sharing it."
+    ),
+)
+def redact(
+    input_spec: str,
+    output_path: Path,
+    offline: bool,
+    company_list_path: Path | None,
+    ignore_verify_failure: bool,
+) -> None:
     """Redact INPUT_SPEC and write the result to OUTPUT_PATH.
 
     INPUT_SPEC may be a single file, a directory (recursed), or a glob
@@ -100,6 +119,17 @@ def redact(input_spec: str, output_path: Path, offline: bool, company_list_path:
     # separate CLI invocations.
     reset_usage_totals()
     reset_circuit_breaker()
+    configure_ignore_verify_failure(ignore_verify_failure)
+    if ignore_verify_failure:
+        click.secho(
+            "⚠️  WARNING: --ignore-verify-failure is set -- any post-redaction "
+            "verification failure will keep the output file instead of deleting "
+            "it. Redaction is likely to be incomplete wherever this fires; check "
+            "flagged output carefully before sharing it.",
+            err=True,
+            fg="yellow",
+            bold=True,
+        )
 
     resolved_company_list = company_list_path or _DEFAULT_COMPANY_LIST_PATH
     if resolved_company_list.exists():

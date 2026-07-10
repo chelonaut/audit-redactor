@@ -79,8 +79,21 @@ _MIN_PHONE_DIGITS = 7
 
 _EMAIL_RE = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?\.[A-Za-z]{2,}")
 
+# Below this, a handful of stray "@"-prefixed characters (e.g. "@O" out of an
+# unrelated sentence) is indistinguishable from a real mention -- found via a
+# real document where a bare 1-character "@O" was flagged as a
+# USERNAME_MENTION and then failed the post-save verification pass purely
+# because a needle that short has a real chance of coincidentally appearing
+# somewhere in a large file's compressed bytes, not because it was an actual
+# username leak. Exported so `appliers/pdf.py` and `appliers/image_ocr.py`
+# can apply the same minimum as an extra verification-time safety net for
+# any short mention that still slips through some other path.
+MIN_USERNAME_MENTION_LENGTH = 4
+
 # @-mention style usernames (GitHub, Slack, Notion, Jira, etc.), e.g. "@octocat".
-_MENTION_RE = re.compile(r"(?<!\w)@[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?\b")
+_MENTION_RE = re.compile(
+    r"(?<!\w)@[A-Za-z0-9][A-Za-z0-9-]{" + str(MIN_USERNAME_MENTION_LENGTH - 2) + r",36}[A-Za-z0-9]\b"
+)
 
 _SCHEME_URL_RE = re.compile(r"\b(?:https?|ftp)://[^\s<>\"')\]]+", re.IGNORECASE)
 _WWW_URL_RE = re.compile(r"\bwww\.[^\s<>\"')\]]+", re.IGNORECASE)

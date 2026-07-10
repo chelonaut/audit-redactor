@@ -302,11 +302,15 @@ def run_claude_augmentation(
         # Retries exhausted -- _call_claude_with_retry already tripped the
         # circuit breaker and warned; nothing more to do here.
         return []
-    print("    Claude responded.", flush=True)
-
     _usage_totals.api_calls += 1
     _usage_totals.input_tokens += response.usage.input_tokens
     _usage_totals.output_tokens += response.usage.output_tokens
+
+    print(
+        f"    Claude responded. Claude usage so far: {_usage_totals.api_calls} API call(s), "
+        f"{_usage_totals.input_tokens:,} input tokens, {_usage_totals.output_tokens:,} output tokens",
+        flush=True,
+    )
 
     if response.stop_reason == "max_tokens":
         # The tool-call response was cut off mid-generation before Claude
