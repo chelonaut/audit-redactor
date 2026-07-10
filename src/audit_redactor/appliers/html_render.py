@@ -23,7 +23,8 @@ from pathlib import Path
 import fitz
 from playwright.sync_api import sync_playwright
 
-from audit_redactor.appliers.pdf import strip_pdf_metadata, verify_pdf_redacted
+from audit_redactor.appliers.output_guard import should_ignore_verify_failure
+from audit_redactor.appliers.pdf import strip_pdf_metadata, verify_pdf_redacted_globally
 from audit_redactor.detectors.base import Span
 
 
@@ -52,7 +53,9 @@ def render_and_finish_pdf(html: str, spans: list[Span], output_path: Path) -> No
     PDF is cleaned up automatically (even on error) since it lives inside a
     `TemporaryDirectory`; if the post-write verification pass itself fails,
     the already-written `output_path` is deleted too, rather than leaving a
-    file flagged as possibly-unsafe sitting at the redacted-output path.
+    file flagged as possibly-unsafe sitting at the redacted-output path --
+    unless --ignore-verify-failure is set (`should_ignore_verify_failure`),
+    in which case the file is kept and a warning is printed instead.
     """
     output_path.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory() as tmp_dir:
@@ -67,7 +70,14 @@ def render_and_finish_pdf(html: str, spans: list[Span], output_path: Path) -> No
             doc.close()
 
     try:
-        verify_pdf_redacted(output_path, spans)
-    except Exception:
-        output_path.unlink(missing_ok=True)
-        raise
+        verify_pdf_redacted_globally(output_path, spans)
+    except Exception as exc:
+        if should_ignore_verify_failure():
+            print(
+                f"⚠️  verification failed but --ignore-verify-failure is set, keeping "
+                f"output anyway -- redaction is likely incomplete, check it carefully: {exc}",
+                flush=True,
+            )
+        else:
+            output_path.unlink(missing_ok=True)
+            raise

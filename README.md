@@ -37,6 +37,16 @@ audit-redactor redact input.pdf output.pdf --offline
 Batch runs never stop on a single file's error — every matched file is
 attempted, and a summary of successes/failures is printed at the end.
 
+### CLI flags
+
+| Flag | Default | Meaning |
+|---|---|---|
+| `--offline` | off | Disable all network calls (no Claude augmentation pass); local regex/company-list detection only. Redaction is more likely to be incomplete — a warning is printed. |
+| `--company-list PATH` (env: `AUDIT_REDACTOR_COMPANY_LIST`) | `~/client_names.txt` | Path to your curated, private client-company-name list (one name per line). Falls back to the bundled safe sample list, with a warning, if the resolved path doesn't exist. The env var is the *only* way to set this through `redact.sh`'s Docker wrapper (see below), which forwards the variable and bind-mounts the file it points at rather than taking its own flag. |
+| `--ignore-verify-failure` | off | Emergency escape hatch: on a post-redaction verification failure, keep the output file and print a loud warning instead of deleting it and erroring out. Never the default — only for when losing an expensive, already-run redaction pass is worse than shipping output that needs manual review. Always check flagged output carefully before sharing it. |
+
+Run `audit-redactor redact --help` for the same information from the tool itself.
+
 ### Progress output
 
 Redaction — especially the Claude augmentation pass — can take a while on
@@ -44,10 +54,12 @@ large batches or multi-page PDFs, so the CLI prints its progress to stdout as
 it goes: which file it's on (`Processing file 3/10 (30%) - report.pdf...`,
 file-count based, not size — a deliberately rough estimate), which PDF page
 (`  Page 2/16...`), and when it's actually waiting on a Claude API call
-(`    Calling Claude...` / `    Claude responded.`) versus doing local work —
-useful for telling whether a slow run is stuck on Claude specifically. A
-final `Claude usage: N API call(s), X input tokens, Y output tokens` line
-totals usage across the whole run (silent if no Claude calls were made, e.g.
+(`    Calling Claude...` / `    Claude responded. Claude usage so far: 6 API
+call(s), 13,705 input tokens, 539 output tokens`) versus doing local work —
+useful for telling whether a slow run is stuck on Claude specifically, and for
+watching cost accumulate live rather than only at the end. A final
+`Claude usage: N API call(s), X input tokens, Y output tokens` line totals
+usage across the whole run (silent if no Claude calls were made, e.g.
 `--offline`).
 
 ### Claude API retries
@@ -154,6 +166,47 @@ same regex/company-list detectors, applied automatically regardless of format.
   Claude's own review already covers).
 
 ## Docker
+
+Three ways to run this in a container, from most to least convenient:
+
+### `redact.sh` (recommended for real files)
+
+```bash
+./redact.sh ~/Downloads/some-report.pdf ~/Downloads/some-report.redacted.pdf
+./redact.sh ~/Downloads/some-folder ~/Downloads/some-folder-redacted --offline
+```
+
+Builds the image and runs it against **any host path**, input or output,
+figuring out which host directory to bind-mount rather than requiring
+everything to live under one shared root. `ANTHROPIC_API_KEY` is forwarded
+automatically if set in your shell. Your curated company-name list is picked
+up the same way `--company-list` would be: set `AUDIT_REDACTOR_COMPANY_LIST`
+once in your shell profile (defaults to `~/client_names.txt` if unset) and
+this script bind-mounts that exact file into the container — there's no
+`--company-list` flag on the script itself, since that would need it to parse
+`"$@"` just to find the path to mount, which is exactly what the env var
+avoids. Any extra arguments (e.g. `--offline`, `--ignore-verify-failure`) are
+forwarded straight through to `audit-redactor redact`.
+
+Glob patterns (e.g. `"docs/**/*.pdf"`) aren't supported by this wrapper —
+resolving a glob's mount point on the host isn't as simple as "the containing
+directory." Use `make run` (below) for those instead.
+
+### `Makefile` (dev loop / repo-relative paths)
+
+```bash
+make build                                    # docker build -t audit-redactor:dev .
+make test                                     # build, then run the test suite inside the container
+make run ARGS="redact /data/input.pdf /data/output.pdf --offline"
+```
+
+`make run` always bind-mounts the repo root at `/data` inside the container
+(so paths in `ARGS` must be given relative to that, e.g. `/data/...`), which
+is what makes glob patterns and directory batches work — unlike `redact.sh`,
+everything is already under one shared mount root. `ANTHROPIC_API_KEY` is
+forwarded the same way as `redact.sh` if set.
+
+### Raw `docker` commands
 
 ```bash
 docker build -t audit-redactor .

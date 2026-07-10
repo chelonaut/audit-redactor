@@ -6,6 +6,7 @@ import pytesseract
 import pytest
 from PIL import Image, ImageDraw, ImageFont
 
+from audit_redactor.appliers.output_guard import configure_ignore_verify_failure
 from audit_redactor.appliers.pdf import PdfRedactionVerificationError, verify_pdf_redacted
 from audit_redactor.detectors.base import Span
 from audit_redactor.pipeline import redact_file
@@ -362,6 +363,42 @@ class TestScannedPage:
         assert "jane@example.com" not in text
         assert "quarterly report" in text  # real text path preserves non-sensitive prose
 
+    def test_screenshot_embedded_in_a_real_text_page_is_ocr_redacted_in_place(self, tmp_path) -> None:
+        # A page with substantial real text plus an embedded screenshot (not
+        # rerouted to whole-page rasterization, per the test above) must
+        # still have that screenshot's own sensitive content OCR-redacted --
+        # not silently left untouched just because the page has real text.
+        img_path = tmp_path / "screenshot.png"
+        image = Image.new("RGB", (900, 200), "white")
+        draw = ImageDraw.Draw(image)
+        draw.text((20, 20), "Customer_email: jane.doe@example.com", fill="black", font=_FONT)
+        image.save(img_path)
+
+        src = tmp_path / "doc.pdf"
+        doc = fitz.open()
+        page = doc.new_page()
+        page.insert_image(fitz.Rect(72, 100, 972, 300), filename=str(img_path))
+        page.insert_text((72, 72), "See the attached screenshot for the customer's order details.")
+        doc.save(src)
+        doc.close()
+        dest = tmp_path / "out.pdf"
+
+        redact_file(src, dest, True)
+
+        result = fitz.open(dest)
+        page_text = result[0].get_text()
+        assert "attached screenshot" in page_text  # real text path preserves non-sensitive prose
+
+        recovered_images = result[0].get_images(full=True)
+        assert len(recovered_images) == 1
+        raw = result.extract_image(recovered_images[0][0])["image"]
+        out_image = Image.open(io.BytesIO(raw))
+        recovered_text = pytesseract.image_to_string(out_image)
+        result.close()
+
+        assert "jane.doe@example.com" not in recovered_text
+        assert b"jane.doe@example.com" not in dest.read_bytes()
+
 
 class TestVerifyRedacted:
     def test_raises_when_span_text_still_recoverable(self, tmp_path) -> None:
@@ -381,7 +418,7 @@ class TestVerifyRedacted:
             end=23,
         )
         with pytest.raises(PdfRedactionVerificationError):
-            verify_pdf_redacted(path, [span])
+            verify_pdf_redacted(path, [[span]])
 
     def test_passes_when_span_text_absent(self, tmp_path) -> None:
         path = tmp_path / "good.pdf"
@@ -399,7 +436,7 @@ class TestVerifyRedacted:
             start=0,
             end=16,
         )
-        verify_pdf_redacted(path, [span])  # should not raise
+        verify_pdf_redacted(path, [[span]])  # should not raise
 
     def test_passes_when_span_text_only_survives_inside_an_unrelated_longer_word(self, tmp_path) -> None:
         # A redacted curated name like "Kyzo" must not fail verification
@@ -418,7 +455,7 @@ class TestVerifyRedacted:
         doc.close()
 
         span = Span(text="Kyzo", entity_type="COMPANY_NAME", confidence=1.0, source="company_list", start=8, end=12)
-        verify_pdf_redacted(path, [span])  # should not raise
+        verify_pdf_redacted(path, [[span]])  # should not raise
 
     def test_raises_when_span_text_recoverable_as_its_own_word(self, tmp_path) -> None:
         # The word-boundary awareness above must not make the check too
@@ -433,4 +470,127 @@ class TestVerifyRedacted:
 
         span = Span(text="Kyzo", entity_type="COMPANY_NAME", confidence=1.0, source="company_list", start=8, end=12)
         with pytest.raises(PdfRedactionVerificationError):
-            verify_pdf_redacted(path, [span])
+            verify_pdf_redacted(path, [[span]])
+
+    def test_bare_first_name_passes_when_only_leaked_via_another_names_visible_prefix(
+        self, tmp_path
+    ) -> None:
+        """A standalone "John" span on one page, redacted down to just "J",
+        must not be flagged as still-recoverable merely because a
+        *different*, correctly-redacted "John Smith" span on another page
+        legitimately shows "John" as its own length-scaled visible prefix
+        (PLAN.md 2.3). Word-boundary matching alone (`_recoverable`) doesn't
+        help here, since "John" is a genuine whole-word match inside "John
+        Smith" -- only per-page scoping avoids the false positive.
+        """
+        path = tmp_path / "names.pdf"
+        doc = fitz.open()
+        page0 = doc.new_page()
+        page0.insert_text((72, 72), "J")
+        page1 = doc.new_page()
+        page1.insert_text((72, 72), "John xxxxxx")
+        doc.save(path)
+        doc.close()
+
+        bare_name = Span(
+            text="John",
+            entity_type="PERSON_NAME",
+            confidence=1.0,
+            source="claude",
+            start=0,
+            end=4,
+        )
+        full_name = Span(
+            text="John Smith",
+            entity_type="PERSON_NAME",
+            confidence=1.0,
+            source="claude",
+            start=0,
+            end=10,
+        )
+        verify_pdf_redacted(path, [[bare_name], [full_name]])  # should not raise
+
+    def test_short_at_mention_does_not_fail_verification(self, tmp_path) -> None:
+        # A bare "@O" out of an unrelated sentence is too short a mention to
+        # meaningfully verify -- found via a real document where one failed
+        # verification purely because a 2-character needle has a real chance
+        # of coincidentally turning up somewhere in the file, not because it
+        # was an actual leak. Below MIN_USERNAME_MENTION_LENGTH, so skipped
+        # by both the text-extraction and raw-bytes checks entirely.
+        path = tmp_path / "doc.pdf"
+        doc = fitz.open()
+        page = doc.new_page()
+        page.insert_text((72, 72), "Some coincidental @O text sitting on the page.")
+        doc.save(path)
+        doc.close()
+
+        span = Span(
+            text="@O",
+            entity_type="USERNAME_MENTION",
+            confidence=1.0,
+            source="regex",
+            start=19,
+            end=21,
+        )
+        verify_pdf_redacted(path, [[span]])  # should not raise despite "@O" still visible
+
+    def test_four_character_at_mention_still_fails_verification(self, tmp_path) -> None:
+        # The exemption is strictly for mentions *below* the minimum -- a
+        # mention at or above it must still be caught if it wasn't redacted.
+        path = tmp_path / "doc.pdf"
+        doc = fitz.open()
+        page = doc.new_page()
+        page.insert_text((72, 72), "Reviewed by @abcd on this PR.")
+        doc.save(path)
+        doc.close()
+
+        span = Span(
+            text="@abcd",
+            entity_type="USERNAME_MENTION",
+            confidence=1.0,
+            source="regex",
+            start=12,
+            end=17,
+        )
+        with pytest.raises(PdfRedactionVerificationError):
+            verify_pdf_redacted(path, [[span]])
+
+
+class TestIgnoreVerifyFailure:
+    """--ignore-verify-failure: a verification failure should keep the
+    output file and warn instead of deleting it and raising -- for
+    emergencies where losing an expensive redaction pass entirely is worse
+    than shipping output that needs manual review.
+    """
+
+    def test_deletes_output_and_raises_by_default(self, tmp_path, monkeypatch) -> None:
+        src = tmp_path / "doc.pdf"
+        _make_pdf(src, ["Contact jane@example.com."])
+        dest = tmp_path / "out.pdf"
+
+        def _always_fails(*args, **kwargs):
+            raise PdfRedactionVerificationError("boom")
+
+        monkeypatch.setattr("audit_redactor.handlers.pdf_handler.verify_pdf_redacted", _always_fails)
+
+        with pytest.raises(PdfRedactionVerificationError):
+            redact_file(src, dest, True)
+
+        assert not dest.exists()
+
+    def test_keeps_output_and_warns_when_flag_set(self, tmp_path, monkeypatch, capsys) -> None:
+        src = tmp_path / "doc.pdf"
+        _make_pdf(src, ["Contact jane@example.com."])
+        dest = tmp_path / "out.pdf"
+
+        def _always_fails(*args, **kwargs):
+            raise PdfRedactionVerificationError("boom")
+
+        monkeypatch.setattr("audit_redactor.handlers.pdf_handler.verify_pdf_redacted", _always_fails)
+        configure_ignore_verify_failure(True)
+
+        result = redact_file(src, dest, True)
+
+        assert result == dest
+        assert dest.exists()
+        assert "⚠️" in capsys.readouterr().out

@@ -1,6 +1,8 @@
 import fitz
 import pytest
 
+from audit_redactor.appliers.output_guard import configure_ignore_verify_failure
+from audit_redactor.appliers.pdf import PdfRedactionVerificationError
 from audit_redactor.handlers.html_handler import redact_html_source
 from audit_redactor.pipeline import redact_file
 
@@ -231,3 +233,37 @@ class TestHtmlHandler:
             redact_file(src, dest, True)
 
         assert actual_output.read_bytes() == prior_bytes
+
+
+class TestIgnoreVerifyFailure:
+    def test_deletes_output_and_raises_by_default(self, tmp_path, monkeypatch) -> None:
+        src = tmp_path / "doc.html"
+        src.write_text("<html><body>Contact jane.doe@example.com</body></html>", encoding="utf-8")
+        dest = tmp_path / "out.html"
+
+        def _always_fails(*args, **kwargs):
+            raise PdfRedactionVerificationError("boom")
+
+        monkeypatch.setattr("audit_redactor.appliers.html_render.verify_pdf_redacted_globally", _always_fails)
+
+        with pytest.raises(PdfRedactionVerificationError):
+            redact_file(src, dest, True)
+
+        assert not (tmp_path / "out.pdf").exists()
+
+    def test_keeps_output_and_warns_when_flag_set(self, tmp_path, monkeypatch, capsys) -> None:
+        src = tmp_path / "doc.html"
+        src.write_text("<html><body>Contact jane.doe@example.com</body></html>", encoding="utf-8")
+        dest = tmp_path / "out.html"
+
+        def _always_fails(*args, **kwargs):
+            raise PdfRedactionVerificationError("boom")
+
+        monkeypatch.setattr("audit_redactor.appliers.html_render.verify_pdf_redacted_globally", _always_fails)
+        configure_ignore_verify_failure(True)
+
+        actual = redact_file(src, dest, True)
+
+        assert actual == tmp_path / "out.pdf"
+        assert actual.exists()
+        assert "⚠️" in capsys.readouterr().out

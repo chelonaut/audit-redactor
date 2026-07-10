@@ -3,6 +3,7 @@ import pytest
 from PIL import Image, ImageDraw, ImageFont, PngImagePlugin
 
 from audit_redactor.appliers.image_ocr import ImageRedactionVerificationError, verify_redacted
+from audit_redactor.appliers.output_guard import configure_ignore_verify_failure
 from audit_redactor.detectors.base import Span
 from audit_redactor.pipeline import redact_file
 
@@ -193,3 +194,52 @@ class TestVerifyRedacted:
             end=16,
         )
         verify_redacted(img, [span])  # should not raise
+
+    def test_short_at_mention_does_not_fail_verification(self) -> None:
+        img = Image.new("RGB", (550, 60), "white")
+        draw = ImageDraw.Draw(img)
+        draw.text((10, 10), "Some coincidental @O text sitting here", fill="black", font=_FONT)
+
+        span = Span(
+            text="@O",
+            entity_type="USERNAME_MENTION",
+            confidence=1.0,
+            source="regex",
+            start=19,
+            end=21,
+        )
+        verify_redacted(img, [span])  # should not raise despite "@O" still visible
+
+
+class TestIgnoreVerifyFailure:
+    def test_deletes_output_and_raises_by_default(self, tmp_path, monkeypatch) -> None:
+        src = tmp_path / "doc.png"
+        _make_image(src, ["Contact jane@example.com."])
+        dest = tmp_path / "out.png"
+
+        def _always_fails(*args, **kwargs):
+            raise ImageRedactionVerificationError("boom")
+
+        monkeypatch.setattr("audit_redactor.appliers.image_ocr.verify_redacted", _always_fails)
+
+        with pytest.raises(ImageRedactionVerificationError):
+            redact_file(src, dest, True)
+
+        assert not dest.exists()
+
+    def test_keeps_output_and_warns_when_flag_set(self, tmp_path, monkeypatch, capsys) -> None:
+        src = tmp_path / "doc.png"
+        _make_image(src, ["Contact jane@example.com."])
+        dest = tmp_path / "out.png"
+
+        def _always_fails(*args, **kwargs):
+            raise ImageRedactionVerificationError("boom")
+
+        monkeypatch.setattr("audit_redactor.appliers.image_ocr.verify_redacted", _always_fails)
+        configure_ignore_verify_failure(True)
+
+        result = redact_file(src, dest, True)
+
+        assert result == dest
+        assert dest.exists()
+        assert "⚠️" in capsys.readouterr().out

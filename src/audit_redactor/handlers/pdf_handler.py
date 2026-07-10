@@ -23,6 +23,17 @@ native text-based path found nothing to act on and left an account ID
 sitting in the page's pixels, completely unredacted, with the post-save
 verification pass reporting a false pass since it had no span text to check
 the raw bytes against in the first place.
+
+A page with *substantial* real text plus an embedded image (e.g. a
+screenshot pasted alongside real prose) isn't "scanned" by that rule, and
+deliberately isn't rerouted through the same whole-page rasterization --
+that would destroy the page's real, selectable text and any links just to
+redact one image. Instead `_redact_incidental_images` OCR-redacts each such
+image in place (`Page.replace_image`, which swaps only that image object's
+stream) alongside the normal native-text redaction, leaving everything else
+on the page untouched -- found via a real document where a screenshot's
+JSON field value went completely unredacted on a page with plenty of its
+own real text, since nothing had ever looked at that embedded image at all.
 """
 
 from __future__ import annotations
@@ -34,7 +45,7 @@ import fitz
 from PIL import Image
 
 from audit_redactor.appliers.image_ocr import ocr_redact_image
-from audit_redactor.appliers.output_guard import ensure_output_does_not_exist
+from audit_redactor.appliers.output_guard import ensure_output_does_not_exist, should_ignore_verify_failure
 from audit_redactor.appliers.pdf import strip_pdf_metadata, verify_pdf_redacted
 from audit_redactor.appliers.text import redact_char_ranges
 from audit_redactor.detectors import detect_text, detect_text_with_claude
@@ -168,6 +179,40 @@ def _redact_scanned_page(
     return spans
 
 
+def _redact_incidental_images(
+    page: "fitz.Page", offline: bool, identity_detector: KnownIdentityDetector
+) -> list[Span]:
+    """OCR-redact each image embedded on `page` in place, leaving the page's
+    real text, layout, and links untouched.
+
+    Called for every non-scanned page (see module docstring) in addition to
+    the native-text redaction above -- a page can have both real prose *and*
+    a screenshot with its own sensitive content, and the two need entirely
+    different redaction methods. `Page.replace_image` swaps just the target
+    image's stream (same bbox/rotation, per its own docs), so this never
+    touches the page's appearance instructions for anything else. Images
+    with nothing sensitive detected are left byte-for-byte alone.
+    """
+    spans: list[Span] = []
+    for img in page.get_images(full=True):
+        xref = img[0]
+        raw = page.parent.extract_image(xref)["image"]
+        image = Image.open(io.BytesIO(raw))
+        if image.mode in ("RGBA", "LA", "PA") or (image.mode == "P" and "transparency" in image.info):
+            image = image.convert("RGBA")
+        else:
+            image = image.convert("RGB")
+
+        redacted_image, image_spans = ocr_redact_image(image, offline, identity_detector=identity_detector)
+        if not image_spans:
+            continue
+        buf = io.BytesIO()
+        redacted_image.save(buf, format="PNG")
+        page.replace_image(xref, stream=buf.getvalue())
+        spans.extend(image_spans)
+    return spans
+
+
 @register(".pdf")
 def redact_pdf(input_path: Path, output_path: Path, offline: bool) -> Path:
     ensure_output_does_not_exist(output_path)
@@ -221,6 +266,7 @@ def redact_pdf(input_path: Path, output_path: Path, offline: bool) -> Path:
                     page.add_redact_annot(rect, fill=_REDACT_FILL)
             if spans:
                 page.apply_redactions()
+            spans.extend(_redact_incidental_images(page, offline, identity_detector))
             _strip_sensitive_links(page, identity_detector)
 
         strip_pdf_metadata(doc)
@@ -230,12 +276,18 @@ def redact_pdf(input_path: Path, output_path: Path, offline: bool) -> Path:
     finally:
         doc.close()
 
-    all_spans = [span for page_spans in spans_by_page for span in page_spans]
     try:
-        verify_pdf_redacted(output_path, all_spans)
-    except Exception:
-        # Don't leave a file flagged as possibly-unsafe sitting at the
-        # redacted-output path.
-        output_path.unlink(missing_ok=True)
-        raise
+        verify_pdf_redacted(output_path, spans_by_page)
+    except Exception as exc:
+        if should_ignore_verify_failure():
+            print(
+                f"⚠️  verification failed but --ignore-verify-failure is set, keeping "
+                f"output anyway -- redaction is likely incomplete, check it carefully: {exc}",
+                flush=True,
+            )
+        else:
+            # Don't leave a file flagged as possibly-unsafe sitting at the
+            # redacted-output path.
+            output_path.unlink(missing_ok=True)
+            raise
     return output_path

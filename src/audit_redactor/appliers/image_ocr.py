@@ -53,6 +53,19 @@ redacted. Such text isn't visibly leaking to a casual viewer, but remains
 programmatically recoverable by anyone who applies similar contrast
 enhancement or re-runs OCR themselves -- flagged here rather than silently
 claimed as covered.
+
+Confirmed via a real screenshot: a single row sitting inside a highlighted/
+selected-match overlay (e.g. a browser "find in page" or log-viewer search
+highlight) can defeat whole-page Tesseract segmentation even though the text
+itself isn't especially low-contrast in isolation -- tested extensively
+(grayscale/per-channel conversions, autocontrast, binarization, upscale
+factors 1x-8x with both Lanczos and nearest-neighbor resampling, and five
+Tesseract page-segmentation modes) with no combination recovering it under
+whole-page automatic segmentation. Isolating just that row into its own crop
+and forcing single-line mode (`--psm 7`) does recover it, but forcing that
+mode across the whole image would break every other multi-line document, so
+this remains an accepted gap rather than something worth a tiling-based
+rewrite for one observed case.
 """
 
 from __future__ import annotations
@@ -62,8 +75,10 @@ from dataclasses import dataclass
 import pytesseract
 from PIL import Image, ImageDraw, ImageOps
 
+from audit_redactor.appliers.output_guard import should_ignore_verify_failure
 from audit_redactor.detectors import detect_text_with_claude
-from audit_redactor.detectors.base import Detector, Span
+from audit_redactor.detectors.base import Detector, EntityType, Span
+from audit_redactor.detectors.regex_detectors import MIN_USERNAME_MENTION_LENGTH
 
 _OCR_UPSCALE = 3
 _AUTOCONTRAST_CUTOFF = 1
@@ -200,6 +215,23 @@ def fresh_copy(image: Image.Image) -> Image.Image:
     return Image.frombytes(image.mode, image.size, image.tobytes())
 
 
+def _too_short_mention_to_verify(span: Span) -> bool:
+    """Same reasoning as `appliers/pdf.py`'s helper of the same name: an
+    "@"-prefixed username mention shorter than
+    `regex_detectors.MIN_USERNAME_MENTION_LENGTH` is too generic a match to
+    meaningfully verify (the regex detector itself now enforces that
+    minimum; this is a second, independent safety net). Scoped to the
+    "@"-prefixed shape specifically, not bare usernames discovered via
+    platform_identity.py, which share the entity type but have their own
+    minimum lengths and genuinely warrant verification even when short.
+    """
+    return (
+        span.entity_type == EntityType.USERNAME_MENTION
+        and span.text.startswith("@")
+        and len(span.text) - 1 < MIN_USERNAME_MENTION_LENGTH
+    )
+
+
 def verify_redacted(image: Image.Image, spans: list[Span]) -> None:
     """Fail loudly if any matched span text is still OCR-recoverable from
     the redacted output, guarding against rect-computation bugs (PLAN.md
@@ -207,6 +239,8 @@ def verify_redacted(image: Image.Image, spans: list[Span]) -> None:
     """
     text, _ = reconstruct_text_and_word_map(image)
     for span in spans:
+        if _too_short_mention_to_verify(span):
+            continue
         if span.text in text:
             raise ImageRedactionVerificationError(
                 f"redaction verification failed: {span.entity_type} span "
@@ -238,5 +272,14 @@ def ocr_redact_image(
     spans = detect_text_with_claude(text, offline, identity_detector=identity_detector)
     redacted = redact_pixels(image, spans, word_spans)
     fresh = fresh_copy(redacted)
-    verify_redacted(fresh, spans)
+    try:
+        verify_redacted(fresh, spans)
+    except ImageRedactionVerificationError as exc:
+        if not should_ignore_verify_failure():
+            raise
+        print(
+            f"⚠️  verification failed but --ignore-verify-failure is set, keeping "
+            f"output anyway -- redaction is likely incomplete, check it carefully: {exc}",
+            flush=True,
+        )
     return fresh, spans
