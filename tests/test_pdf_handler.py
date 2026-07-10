@@ -234,6 +234,39 @@ class TestSensitiveLinks:
         result.close()
         assert b"octocat" not in dest.read_bytes()
 
+    def test_ordinary_link_matching_a_redacted_visible_url_elsewhere_does_not_fail_verification(
+        self, tmp_path
+    ) -> None:
+        # Found via a real Jira-exported PDF: the same plain URL appeared
+        # both as blacked-out visible text (a "Exported from: <url>" line)
+        # and, unrelated to that, as the target of an ordinary kept link
+        # elsewhere on the page (e.g. site branding) whose URI carries
+        # nothing else sensitive. That's correct per `test_ordinary_
+        # external_link_is_kept` above, but `verify_pdf_redacted`'s "this
+        # span's text must not exist anywhere in the raw file" check used to
+        # flag it as leaked anyway, even though the actual visible
+        # occurrence was fully redacted.
+        src = tmp_path / "doc.pdf"
+        doc = fitz.open()
+        page = doc.new_page()
+        url = "https://example.atlassian.net"
+        page.insert_text((72, 72), f"Exported from: {url}")
+        page.insert_text((72, 700), "Powered by Jira")
+        page.insert_link({"kind": fitz.LINK_URI, "from": fitz.Rect(72, 690, 200, 715), "uri": url})
+        doc.save(src)
+        doc.close()
+        dest = tmp_path / "out.pdf"
+
+        redact_file(src, dest, True)
+
+        result = fitz.open(dest)
+        text = result[0].get_text()
+        links = result[0].get_links()
+        result.close()
+        assert url not in text
+        assert len(links) == 1
+        assert links[0]["uri"] == url
+
 
 class TestIdentityDiscoveryAcrossPages:
     def test_username_from_page_one_link_redacts_bare_mention_on_page_two(self, tmp_path) -> None:
@@ -367,3 +400,37 @@ class TestVerifyRedacted:
             end=16,
         )
         verify_pdf_redacted(path, [span])  # should not raise
+
+    def test_passes_when_span_text_only_survives_inside_an_unrelated_longer_word(self, tmp_path) -> None:
+        # A redacted curated name like "Kyzo" must not fail verification
+        # just because the document separately contains a longer, different,
+        # never-matched word that happens to start with the same letters
+        # (e.g. "Kyzotech") -- a plain substring check can't tell the two
+        # apart, but the word-boundary rule the detector itself used to
+        # decide "Kyzotech" was never a match in the first place must also
+        # apply here, or every short curated name risks failing verification
+        # on unrelated document text.
+        path = tmp_path / "good.pdf"
+        doc = fitz.open()
+        page = doc.new_page()
+        page.insert_text((72, 72), "See the Kyzotech documentation for details.")
+        doc.save(path)
+        doc.close()
+
+        span = Span(text="Kyzo", entity_type="COMPANY_NAME", confidence=1.0, source="company_list", start=8, end=12)
+        verify_pdf_redacted(path, [span])  # should not raise
+
+    def test_raises_when_span_text_recoverable_as_its_own_word(self, tmp_path) -> None:
+        # The word-boundary awareness above must not make the check too
+        # lenient -- a genuine, still-visible standalone occurrence must
+        # still fail.
+        path = tmp_path / "bad.pdf"
+        doc = fitz.open()
+        page = doc.new_page()
+        page.insert_text((72, 72), "Still working with Kyzo on this deal.")
+        doc.save(path)
+        doc.close()
+
+        span = Span(text="Kyzo", entity_type="COMPANY_NAME", confidence=1.0, source="company_list", start=8, end=12)
+        with pytest.raises(PdfRedactionVerificationError):
+            verify_pdf_redacted(path, [span])

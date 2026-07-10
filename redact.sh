@@ -15,6 +15,16 @@
 #   If ANTHROPIC_API_KEY is set in your shell, it's forwarded into the
 #   container automatically, enabling the Claude augmentation pass. Unset
 #   (or pass --offline) to run local-only.
+#
+#   Your curated, private company-name list (see cli.py's --company-list)
+#   is picked up the same way: set AUDIT_REDACTOR_COMPANY_LIST once in your
+#   shell profile (defaults to ~/client_names.txt if unset) and this script
+#   bind-mounts that exact file into the container and forwards the
+#   variable -- no --company-list flag needed here. A CLI flag would need
+#   this script to inspect "$@" just to find the path to mount, which is
+#   exactly the parsing an env var avoids; if the file doesn't exist, it's
+#   silently skipped and the containerized CLI falls back to its own
+#   bundled-sample-list warning.
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")"
 
@@ -62,8 +72,19 @@ output_host_dir="$(_mount_dir "$output")"
 input_container="$(_container_path "$input" /input)"
 output_container="$(_container_path "$output" /output)"
 
+# Only bind-mount + forward the company list if the file actually exists --
+# `docker run -v` on a missing host path creates an empty directory there
+# instead of erroring, which would both fail to help and leave stray litter
+# at (most likely) the user's chosen path.
+company_list_host="${AUDIT_REDACTOR_COMPANY_LIST:-$HOME/client_names.txt}"
+company_list_args=()
+if [[ -f "$company_list_host" ]]; then
+    company_list_args=(-v "$company_list_host:/company_names.txt:ro" -e AUDIT_REDACTOR_COMPANY_LIST=/company_names.txt)
+fi
+
 docker run --rm \
     -e ANTHROPIC_API_KEY \
+    "${company_list_args[@]+"${company_list_args[@]}"}" \
     -v "$input_host_dir:/input:ro" \
     -v "$output_host_dir:/output" \
     "$image" redact "$input_container" "$output_container" "$@"
